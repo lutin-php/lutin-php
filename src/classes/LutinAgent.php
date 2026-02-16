@@ -29,8 +29,9 @@ class AnthropicAdapter implements LutinProviderAdapter {
 
         // Use provided system prompt or fall back to default
         $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-            'You can read files, list directories, and write files on the server. ' .
-            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
+            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
             'When asked to create or modify a page, read the existing files first to understand the structure.';
 
         $payload = [
@@ -123,8 +124,9 @@ class OpenAIAdapter implements LutinProviderAdapter {
 
         // Use provided system prompt or fall back to default
         $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-            'You can read files, list directories, and write files on the server. ' .
-            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
+            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
             'When asked to create or modify a page, read the existing files first to understand the structure.';
 
         // Prepend system message to messages array
@@ -242,7 +244,7 @@ class LutinAgent {
 
     /**
      * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
-     * The AGENTS.md file is read from the data directory (outside web root).
+     * The AGENTS.md file is read from the lutin directory.
      */
     private function buildSystemPrompt(): string {
         if ($this->systemPrompt !== null) {
@@ -250,12 +252,13 @@ class LutinAgent {
         }
 
         $basePrompt = 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-            'You can read files, list directories, and write files on the server. ' .
-            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
+            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
             'When asked to create or modify a page, read the existing files first to understand the structure.';
 
-        $dataDir = $this->config->getDataDir();
-        $agentsMdPath = $dataDir . '/AGENTS.md';
+        $lutinDir = $this->config->getLutinDir();
+        $agentsMdPath = $lutinDir . '/AGENTS.md';
 
         if (file_exists($agentsMdPath) && is_readable($agentsMdPath)) {
             $agentsContent = file_get_contents($agentsMdPath);
@@ -297,33 +300,33 @@ class LutinAgent {
         $tools = [
             [
                 'name' => 'list_files',
-                'description' => 'Lists files in a directory. Path is relative to site root.',
+                'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
                 'input_schema' => [
                     'type' => 'object',
                     'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'Directory path relative to root'],
+                        'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
                     ],
                     'required' => ['path'],
                 ],
             ],
             [
                 'name' => 'read_file',
-                'description' => 'Reads a file. Path is relative to site root.',
+                'description' => 'Reads a file. Path is relative to project root.',
                 'input_schema' => [
                     'type' => 'object',
                     'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to root'],
+                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
                     ],
                     'required' => ['path'],
                 ],
             ],
             [
                 'name' => 'write_file',
-                'description' => 'Writes or creates a file. Path is relative to site root.',
+                'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
                 'input_schema' => [
                     'type' => 'object',
                     'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to root'],
+                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
                         'content' => ['type' => 'string', 'description' => 'File content'],
                     ],
                     'required' => ['path', 'content'],

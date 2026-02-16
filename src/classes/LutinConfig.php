@@ -4,52 +4,66 @@ declare(strict_types=1);
 class LutinConfig {
     // Internal state
     private array $data = [];
-    private string $webRootDir;   // absolute path to the web root (directory containing lutin.php)
-    private string $dataDir;      // absolute path to the data directory (outside web root)
+    private string $projectRootDir;   // absolute path to the project root (configurable)
+    private string $webRootDir;       // absolute path to the web root (where lutin.php lives)
+    private string $lutinDir;         // absolute path to the lutin directory (auto-derived as projectRoot/lutin)
 
-    public function __construct(string $webRootDir, ?string $dataDir = null) {
-        $this->webRootDir = rtrim($webRootDir, '/');
-        // Default data directory is ../lutin (outside web root)
-        $this->dataDir = $dataDir ? rtrim($dataDir, '/') : dirname($this->webRootDir) . '/lutin';
+    public function __construct(?string $projectRootDir = null, ?string $webRootDir = null, ?string $lutinDir = null) {
+        // Default project root is parent of current directory (src/)
+        $this->projectRootDir = $projectRootDir ? rtrim($projectRootDir, '/') : dirname(__DIR__);
+        
+        // Default web root is the directory where lutin.php lives (src/ in dev)
+        $this->webRootDir = $webRootDir ? rtrim($webRootDir, '/') : __DIR__;
+        
+        // Lutin dir is auto-derived inside project root, or can be overridden for backwards compatibility
+        $this->lutinDir = $lutinDir ? rtrim($lutinDir, '/') : $this->projectRootDir . '/lutin';
+    }
+
+    /**
+     * Returns the project root directory.
+     */
+    public function getProjectRoot(): string {
+        return $this->projectRootDir;
     }
 
     /**
      * Returns the web root directory (where lutin.php lives).
+     * This is typically a subdirectory of project root (e.g., public/, www/).
      */
     public function getWebRoot(): string {
         return $this->webRootDir;
     }
 
     /**
-     * Returns the data directory (outside web root).
+     * Returns the lutin directory (stores config, backups, temp).
      */
-    public function getDataDir(): string {
-        return $this->dataDir;
+    public function getLutinDir(): string {
+        return $this->lutinDir;
     }
 
     /**
-     * Returns the path to the config file (in data directory).
+     * Returns the path to the config file (in lutin directory).
      */
     private function getConfigPath(): string {
-        return $this->dataDir . '/config.json';
+        return $this->lutinDir . '/config.json';
     }
 
     /**
-     * Returns the path to the backup directory (in data directory).
+     * Returns the path to the backup directory (in lutin directory).
      */
     public function getBackupDir(): string {
-        return $this->dataDir . '/backups';
+        return $this->lutinDir . '/backups';
     }
 
     /**
-     * Returns the path to the temp directory (in data directory).
+     * Returns the path to the temp directory (in lutin directory).
      */
     public function getTempDir(): string {
-        return $this->dataDir . '/temp';
+        return $this->lutinDir . '/temp';
     }
 
     /**
-     * Reads config.json from the data directory into $this->data.
+     * Reads config.json from the lutin directory into $this->data.
      * Returns false if file missing.
      */
     public function load(): bool {
@@ -60,26 +74,34 @@ class LutinConfig {
         $content = file_get_contents($path);
         $decoded = json_decode($content, true, 512, JSON_THROW_ON_ERROR);
         $this->data = is_array($decoded) ? $decoded : [];
-        // Update dataDir from loaded config if present
-        if (!empty($this->data['data_dir'])) {
-            $this->dataDir = $this->data['data_dir'];
+        // Update directories from loaded config if present
+        if (!empty($this->data['project_root'])) {
+            $this->projectRootDir = $this->data['project_root'];
+        }
+        if (!empty($this->data['web_root'])) {
+            $this->webRootDir = $this->data['web_root'];
+        }
+        if (!empty($this->data['lutin_dir'])) {
+            $this->lutinDir = $this->data['lutin_dir'];
         }
         return true;
     }
 
     /**
-     * Writes $this->data back to config.json in the data directory.
-     * Creates data directory if needed.
+     * Writes $this->data back to config.json in the lutin directory.
+     * Creates lutin directory if needed.
      */
     public function save(): void {
-        if (!is_dir($this->dataDir)) {
-            mkdir($this->dataDir, 0700, true);
-            // Write .htaccess to protect the directory (if inside web root or not)
-            file_put_contents($this->dataDir . '/.htaccess', "Deny from all\n");
+        if (!is_dir($this->lutinDir)) {
+            mkdir($this->lutinDir, 0700, true);
+            // Write .htaccess to protect the directory
+            file_put_contents($this->lutinDir . '/.htaccess', "Deny from all\n");
         }
 
-        // Store data_dir in config for persistence
-        $this->data['data_dir'] = $this->dataDir;
+        // Store directories in config for persistence
+        $this->data['project_root'] = $this->projectRootDir;
+        $this->data['web_root'] = $this->webRootDir;
+        $this->data['lutin_dir'] = $this->lutinDir;
 
         $path = $this->getConfigPath();
         $json = json_encode($this->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
@@ -165,9 +187,24 @@ class LutinConfig {
         $this->data['site_url'] = $url;
     }
 
-    public function setDataDir(string $dataDir): void {
-        $this->dataDir = rtrim($dataDir, '/');
-        $this->data['data_dir'] = $this->dataDir;
+    public function setProjectRoot(string $projectRoot): void {
+        $this->projectRootDir = rtrim($projectRoot, '/');
+        $this->data['project_root'] = $this->projectRootDir;
+        // Auto-update lutin dir if it was at the default location
+        if (!isset($this->data['lutin_dir']) || $this->lutinDir === $this->projectRootDir . '/lutin') {
+            $this->lutinDir = $this->projectRootDir . '/lutin';
+            $this->data['lutin_dir'] = $this->lutinDir;
+        }
+    }
+
+    public function setWebRoot(string $webRoot): void {
+        $this->webRootDir = rtrim($webRoot, '/');
+        $this->data['web_root'] = $this->webRootDir;
+    }
+
+    public function setLutinDir(string $lutinDir): void {
+        $this->lutinDir = rtrim($lutinDir, '/');
+        $this->data['lutin_dir'] = $this->lutinDir;
     }
 
     // Raw access for the config tab UI
@@ -177,8 +214,14 @@ class LutinConfig {
 
     public function fromArray(array $data): void {
         $this->data = $data;
-        if (!empty($data['data_dir'])) {
-            $this->dataDir = $data['data_dir'];
+        if (!empty($data['project_root'])) {
+            $this->projectRootDir = $data['project_root'];
+        }
+        if (!empty($data['web_root'])) {
+            $this->webRootDir = $data['web_root'];
+        }
+        if (!empty($data['lutin_dir'])) {
+            $this->lutinDir = $data['lutin_dir'];
         }
     }
 }

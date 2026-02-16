@@ -45,54 +45,57 @@ $tests['LutinAgent::OpenAIAdapter (instantiation)'] = function() {
 
 // Test: LutinAgent instantiation with Anthropic
 $tests['LutinAgent::instantiation (Anthropic)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site1/web';
-    $dataDir = $scratch . '/site1/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $config = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site1';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    $config = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('test-api-key');
     $config->setModel('claude-3-5-haiku-20241022');
     $config->save();
 
-    $fm = new LutinFileManager($webRoot, $dataDir, $config);
+    $fm = new LutinFileManager($config);
     $agent = new LutinAgent($config, $fm);
     assert_true($agent instanceof LutinAgent, 'LutinAgent should instantiate');
 };
 
 // Test: LutinAgent instantiation with OpenAI
 $tests['LutinAgent::instantiation (OpenAI)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site2/web';
-    $dataDir = $scratch . '/site2/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $config = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site2';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    $config = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('openai');
     $config->setApiKey('sk-test-key');
     $config->setModel('gpt-4');
     $config->save();
 
-    $fm = new LutinFileManager($webRoot, $dataDir, $config);
+    $fm = new LutinFileManager($config);
     $agent = new LutinAgent($config, $fm);
     assert_true($agent instanceof LutinAgent, 'LutinAgent should instantiate with OpenAI');
 };
 
 // Test: Chat method exists
 $tests['LutinAgent::chat (method exists)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site3/web';
-    $dataDir = $scratch . '/site3/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $config = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site3';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    $config = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('test-api-key');
     $config->setModel('claude-3-5-haiku-20241022');
     $config->save();
 
-    $fm = new LutinFileManager($webRoot, $dataDir, $config);
+    $fm = new LutinFileManager($config);
     $agent = new LutinAgent($config, $fm);
 
     assert_true(method_exists($agent, 'chat'), 'LutinAgent should have chat method');
@@ -100,11 +103,12 @@ $tests['LutinAgent::chat (method exists)'] = function() use ($scratch) {
 
 // Test: Router initializes with all dependencies
 $tests['LutinRouter::initialization'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site4/web';
-    $dataDir = $scratch . '/site4/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $config = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site4';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    $config = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('test-api-key');
@@ -113,7 +117,7 @@ $tests['LutinRouter::initialization'] = function() use ($scratch) {
 
     $auth = new LutinAuth($config);
     $auth->startSession();
-    $fm = new LutinFileManager($webRoot, $dataDir, $config);
+    $fm = new LutinFileManager($config);
     $view = new LutinView($config, $auth);
 
     $router = new LutinRouter($config, $auth, $fm, null, $view);
@@ -122,11 +126,12 @@ $tests['LutinRouter::initialization'] = function() use ($scratch) {
 
 // Test: handleChat method exists
 $tests['LutinRouter::handleChat (exists)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site5/web';
-    $dataDir = $scratch . '/site5/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $config = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site5';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    $config = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('test-api-key');
@@ -136,7 +141,7 @@ $tests['LutinRouter::handleChat (exists)'] = function() use ($scratch) {
     $auth = new LutinAuth($config);
     $auth->startSession();
 
-    $fm = new LutinFileManager($webRoot, $dataDir, $config);
+    $fm = new LutinFileManager($config);
     $view = new LutinView($config, $auth);
 
     $reflection = new ReflectionClass(new LutinRouter($config, $auth, $fm, null, $view));

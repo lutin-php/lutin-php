@@ -4,14 +4,17 @@
 
 **Lutin.php** is a self-hosted, single-file PHP development environment.
 It lets users build and edit websites through an AI-powered chat interface or a manual code editor.
-When `lutin.php` and the data directory are removed, the managed website remains 100% functional.
+When `lutin.php` and the lutin directory are removed, the managed website remains 100% functional.
 
 ### Architecture
 
 Lutin.php follows a **two-directory architecture** for security:
 
-- **Web Root** (`public/`, `www/`, etc.): The public-facing directory where `lutin.php` lives and where all website files are created/edited.
-- **Data Directory** (`../lutin/` by default): Located **outside** the web root, stores:
+- **Project Root** (configurable): The root directory of the project containing all source code, 
+  configuration files, and website files. The AI agent can read/write anywhere in this directory.
+- **Web Root** (`public/`, `www/`, etc.): A subdirectory of the project root where `lutin.php` lives 
+  and where public-facing website files are served from.
+- **Lutin Directory** (`lutin/` inside project root): Stores:
   - `config.json` — configuration including password hash, API key, provider settings
   - `backups/` — timestamped backups of all file changes
   - `temp/` — temporary files
@@ -26,15 +29,15 @@ This separation ensures that sensitive configuration data is never accessible vi
 lutin/
 ├── src/                        # Source files (developed here)
 │   ├── classes/                # Core PHP classes
-│   │   ├── LutinConfig.php     # Config management + data dir handling
+│   │   ├── LutinConfig.php     # Config management + project root handling
 │   │   ├── LutinAuth.php
-│   │   ├── LutinFileManager.php # Web root + data dir file operations
+│   │   ├── LutinFileManager.php # Project root + lutin dir file operations
 │   │   ├── LutinAgent.php
 │   │   ├── LutinRouter.php
 │   │   └── LutinView.php
 │   ├── views/                  # HTML view partials
 │   │   ├── layout.php          # Outer HTML shell (head, tabs, script tags)
-│   │   ├── setup_wizard.php    # First-run setup form (includes data dir config)
+│   │   ├── setup_wizard.php    # First-run setup form (includes project root config)
 │   │   ├── login.php           # Login form
 │   │   ├── tab_chat.php        # Chat tab markup
 │   │   ├── tab_editor.php      # Manual editor tab markup
@@ -57,8 +60,8 @@ lutin/
 │   └── dev.sh                  # Bash wrapper: start dev server from src/
 ├── run/                        # Runtime directory (created by start.sh)
 │   ├── public/                 # Web root (lutin.php copied here)
-│   └── lutin/                  # Data directory (outside web root)
-├── tests/                      # (legacy symlink, use scripts/ now)
+│   └── lutin/                  # Lutin directory (stores config, backups)
+├── tests/                      # Unit tests
 ├── docs/
 │   ├── STARTER_SPECS.md
 │   └── DEV_PLAN_V1.md
@@ -103,7 +106,7 @@ Run `./scripts/qa.sh` to execute all gates. Individual gates:
 |------|---------|---------|
 | Syntax lint | `./scripts/lint.sh` | Check all PHP files for syntax errors |
 | Build | `./scripts/build.sh` | Compile src/ into dist/lutin.php |
-| Unit tests | `./scripts/test.sh` | Run test suite (7 tests) |
+| Unit tests | `./scripts/test.sh` | Run test suite |
 | Boot probe | `./scripts/check.sh` | Start server and verify it renders |
 
 **All gates must pass before committing changes.**
@@ -149,9 +152,9 @@ and writes a single self-contained `dist/lutin.php`.
 
 1. `LutinFileManager::write()` and `LutinFileManager::read()` must refuse any path that
    resolves to `lutin.php`.
-2. The data directory (`config.json`, `backups/`, `temp/`) lives **outside** the web root
-   and is never directly accessible via HTTP.
-3. Before every write, `LutinFileManager` creates a timestamped backup in the data directory's
+2. The lutin directory (`config.json`, `backups/`, `temp/`) lives inside the project root
+   but is never directly accessible via HTTP.
+3. Before every write, `LutinFileManager` creates a timestamped backup in the lutin directory's
    `backups/YYYY-MM-DD_HH-II-SS_<basename>`.
 4. All AI tool-call arguments are re-validated server-side; the AI's output is never trusted directly.
 5. The password hash is stored in `config.json` as a `password_hash()` bcrypt string.
@@ -162,7 +165,7 @@ and writes a single self-contained `dist/lutin.php`.
 
 ## AI Provider Abstraction
 
-`LutinAgent` communicates with a single provider configured globally in the data directory's `config.json`.
+`LutinAgent` communicates with a single provider configured globally in the lutin directory's `config.json`.
 Supported providers in v1: **Anthropic** (Claude) and **OpenAI** (GPT).
 The provider adapter is selected at runtime based on `config.provider` — no code changes needed to switch.
 
@@ -179,12 +182,15 @@ Available AI tools (PHP-side functions the agent can invoke):
 
 ## Key Implementation Notes for Haiku
 
-- **Startup flow:** On first visit (no config), Lutin renders a setup wizard (password + provider + API key + optional data directory).
+- **Startup flow:** On first visit (no config), Lutin renders a setup wizard (password + provider + API key + optional project root).
   On subsequent visits, `LutinAuth` checks the session; if unauthenticated, shows login form.
-- **Two-directory architecture:**
-  - `LutinConfig` manages both `webRootDir` (where lutin.php lives) and `dataDir` (outside web root)
-  - Default data directory is `../lutin` relative to web root
-  - Configurable via `LUTIN_DATA_DIR` environment variable or setup wizard
+- **Three-directory architecture:**
+  - `LutinConfig` manages three directories:
+    - `projectRootDir` — the project root (configurable, asked in setup)
+    - `webRootDir` — where lutin.php lives and public files are served from (configurable, asked in setup)
+    - `lutinDir` — internal files (auto-created as `projectRoot/lutin`)
+  - Defaults: project root = parent of lutin.php, web root = directory containing lutin.php
+  - Configurable via `LUTIN_PROJECT_ROOT` environment variable or setup wizard
 - **Accessing Lutin:** Lutin is accessed explicitly via `/lutin.php`. The web root (`/`) serves the managed website files (index.html, etc.).
 - **SSE streaming (emulated):** The agent makes synchronous API calls, then yields SSE `data:` 
   events to the frontend. This keeps the connection alive on slow hosts while keeping the 

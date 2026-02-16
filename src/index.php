@@ -1,9 +1,11 @@
 <?php
 // Define root directories
 // LUTIN_ROOT: directory containing lutin.php (web root)
-// LUTIN_DATA_DIR: directory for Lutin's data (outside web root by default)
+// LUTIN_PROJECT_ROOT: directory for the project (configurable, defaults to parent of LUTIN_ROOT)
+// LUTIN_LUTIN_DIR: directory for Lutin's internal files (auto-created as projectRoot/lutin)
 define('LUTIN_ROOT', __DIR__);
-define('LUTIN_DATA_DIR', getenv('LUTIN_DATA_DIR') ?: dirname(__DIR__) . '/lutin');
+define('LUTIN_PROJECT_ROOT', getenv('LUTIN_PROJECT_ROOT') ?: dirname(__DIR__));
+define('LUTIN_LUTIN_DIR', getenv('LUTIN_LUTIN_DIR') ?: LUTIN_PROJECT_ROOT . '/lutin');
 define('LUTIN_VERSION', '1.0.0');
 
 // In dev: require_once each class file.
@@ -17,14 +19,15 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/classes/LutinView.php';
 }
 
-// Bootstrap
-$config = new LutinConfig(LUTIN_ROOT, LUTIN_DATA_DIR);
+// Bootstrap - pass current directories as defaults, config will override if saved
+$config = new LutinConfig(LUTIN_PROJECT_ROOT, LUTIN_ROOT, LUTIN_LUTIN_DIR);
 $config->load();
 
 $auth = new LutinAuth($config);
 $auth->startSession();
 
-$fm    = new LutinFileManager(LUTIN_ROOT, $config->getDataDir(), $config);
+// Use the configured web root from config (which may have been loaded from config.json)
+$fm    = new LutinFileManager($config);
 $view  = new LutinView($config, $auth);
 
 // Agent is initialized lazily by router when needed

@@ -30,9 +30,14 @@
         <input type="url" id="setup-site-url" name="site_url" placeholder="https://example.com">
       </label>
       <label>
-        Data Directory (optional)
-        <input type="text" id="setup-data-dir" name="data_dir" placeholder="../lutin">
-        <small>Where Lutin stores config and backups. Default is outside the web root for security.</small>
+        Project Root Directory (optional)
+        <input type="text" id="setup-project-root" name="project_root" placeholder="/path/to/project">
+        <small>The root directory of your project. The AI can access all files here except the lutin/ directory. Default is the parent directory of where lutin.php is located.</small>
+      </label>
+      <label>
+        Web Root Directory (optional)
+        <input type="text" id="setup-web-root" name="web_root" placeholder="/path/to/public">
+        <small>The directory where lutin.php lives and public-facing files are served from. This is typically a subdirectory of Project Root (e.g., public/, www/, html/). Default is the directory where lutin.php is located.</small>
       </label>
       <button type="submit">Set up Lutin</button>
     </form>

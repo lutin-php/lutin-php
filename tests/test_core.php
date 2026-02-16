@@ -1,5 +1,5 @@
 <?php
-// tests/test.php — Lutin unit tests (no Composer)
+// tests/test_core.php — Lutin unit tests (no Composer)
 declare(strict_types=1);
 
 // Change to repo root for relative paths
@@ -48,37 +48,38 @@ $tests = [];
 
 // Test: LutinConfig — isFirstRun when no file
 $tests['LutinConfig::isFirstRun (no file)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site1/web';
-    $dataDir = $scratch . '/site1/lutin';
-    mkdir($webRoot, 0700, true);
-    $cfg = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site1';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     assert_true($cfg->isFirstRun(), 'isFirstRun should be true when config missing');
 };
 
 // Test: LutinConfig — isFirstRun after save
 $tests['LutinConfig::isFirstRun (after save)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site2/web';
-    $dataDir = $scratch . '/site2/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $cfg = new LutinConfig($webRoot, $dataDir);
+    $projectRoot = $scratch . '/site2';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $cfg->setPasswordHash(password_hash('secret', PASSWORD_BCRYPT));
     $cfg->setProvider('anthropic');
     $cfg->setApiKey('sk-test');
     $cfg->save();
-    $cfg2 = new LutinConfig($webRoot, $dataDir);
+    $cfg2 = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $cfg2->load();
     assert_true(!$cfg2->isFirstRun(), 'isFirstRun should be false after save');
 };
 
 // Test: LutinFileManager::safePath — path escape attempt
 $tests['LutinFileManager::safePath (escape attempt)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site3/web';
-    $dataDir = $scratch . '/site3/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    $cfg = new LutinConfig($webRoot, $dataDir);
-    $fm  = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $projectRoot = $scratch . '/site3';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    $cfg = new LutinConfig($projectRoot, $lutinDir);
+    $fm  = new LutinFileManager($cfg);
     assert_throws(
         fn() => $fm->safePath('../../etc/passwd'),
         \RuntimeException::class,
@@ -88,13 +89,13 @@ $tests['LutinFileManager::safePath (escape attempt)'] = function() use ($scratch
 
 // Test: LutinFileManager::safePath — blocks lutin.php
 $tests['LutinFileManager::safePath (protected lutin.php)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site4/web';
-    $dataDir = $scratch . '/site4/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
-    touch($webRoot . '/lutin.php');
-    $cfg = new LutinConfig($webRoot, $dataDir);
-    $fm  = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $projectRoot = $scratch . '/site4';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    touch($projectRoot . '/lutin.php');
+    $cfg = new LutinConfig($projectRoot, $lutinDir);
+    $fm  = new LutinFileManager($cfg);
     assert_throws(
         fn() => $fm->safePath('lutin.php'),
         \RuntimeException::class,
@@ -102,57 +103,79 @@ $tests['LutinFileManager::safePath (protected lutin.php)'] = function() use ($sc
     );
 };
 
+// Test: LutinFileManager::safePath — blocks lutin directory
+$tests['LutinFileManager::safePath (protected lutin dir)'] = function() use ($scratch) {
+    $projectRoot = $scratch . '/site4b';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
+    file_put_contents($lutinDir . '/config.json', '{"test": true}');
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
+    $fm  = new LutinFileManager($cfg);
+    assert_throws(
+        fn() => $fm->safePath('lutin/config.json'),
+        \RuntimeException::class,
+        'safePath must throw for lutin directory'
+    );
+};
+
 // Test: LutinFileManager::writeFile — creates backup before overwrite
 $tests['LutinFileManager::writeFile (backup created)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site5/web';
-    $dataDir = $scratch . '/site5/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir . '/backups', 0700, true);
-    file_put_contents($webRoot . '/index.php', '<?php echo "v1";');
-    $cfg = new LutinConfig($webRoot, $dataDir);
-    $fm  = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $projectRoot = $scratch . '/site5';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir . '/backups', 0700, true);
+    // Create file in project root
+    file_put_contents($projectRoot . '/index.php', '<?php echo "v1";');
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
+    $fm  = new LutinFileManager($cfg);
+    // Write using path relative to project root
     $fm->writeFile('index.php', '<?php echo "v2";');
     // Backup dir should contain exactly one file
-    $backups = glob($dataDir . '/backups/*index.php');
+    $backups = glob($lutinDir . '/backups/*index.php');
     assert_true(count($backups) === 1, 'One backup should exist after writeFile');
     assert_true(str_contains(file_get_contents($backups[0]), 'v1'), 'Backup must contain original content');
-    assert_true(file_get_contents($webRoot . '/index.php') === '<?php echo "v2";', 'Live file must contain new content');
+    assert_true(file_get_contents($projectRoot . '/index.php') === '<?php echo "v2";', 'Live file must contain new content');
 };
 
 // Test: LutinFileManager::urlToFile — heuristic mapping
 $tests['LutinFileManager::urlToFile (basic heuristics)'] = function() use ($scratch) {
-    $webRoot = $scratch . '/site6/web';
-    $dataDir = $scratch . '/site6/lutin';
+    $projectRoot = $scratch . '/site6';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
     mkdir($webRoot . '/pages', 0700, true);
-    mkdir($dataDir, 0700, true);
+    mkdir($lutinDir, 0700, true);
     touch($webRoot . '/pages/about.php');
     touch($webRoot . '/about.php');
-    $cfg = new LutinConfig($webRoot, $dataDir);
-    $fm  = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
+    $fm  = new LutinFileManager($cfg);
     $candidates = $fm->urlToFile('https://example.com/about');
     assert_true(count($candidates) >= 1, 'urlToFile must find at least one candidate');
     assert_true(in_array('about.php', $candidates) || in_array('pages/about.php', $candidates),
         'urlToFile must include about.php or pages/about.php');
 };
 
-// Test: LutinAgent — AGENTS.md from data directory is included in system prompt
+// Test: LutinAgent — AGENTS.md from lutin directory is included in system prompt
 $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scratch) {
     require_once __DIR__ . '/../src/classes/LutinAgent.php';
     
-    $webRoot = $scratch . '/site7/web';
-    $dataDir = $scratch . '/site7/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
+    $projectRoot = $scratch . '/site7';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
     
-    // Create AGENTS.md in data directory
-    file_put_contents($dataDir . '/AGENTS.md', "# Project Guidelines\n\nUse Tailwind CSS.");
+    // Create AGENTS.md in lutin directory
+    file_put_contents($lutinDir . '/AGENTS.md', "# Project Guidelines\n\nUse Tailwind CSS.");
     
     // Create a mock config with required values
-    $cfg = new LutinConfig($webRoot, $dataDir);
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $cfg->setProvider('anthropic');
     $cfg->setApiKey('sk-test');
     
-    $fm = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $fm = new LutinFileManager($cfg);
     $agent = new LutinAgent($cfg, $fm);
     
     // Use reflection to test the private method
@@ -170,18 +193,19 @@ $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scra
 $tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($scratch) {
     require_once __DIR__ . '/../src/classes/LutinAgent.php';
     
-    $webRoot = $scratch . '/site8/web';
-    $dataDir = $scratch . '/site8/lutin';
-    mkdir($webRoot, 0700, true);
-    mkdir($dataDir, 0700, true);
+    $projectRoot = $scratch . '/site8';
+    $webRoot = $projectRoot;
+    $lutinDir = $projectRoot . '/lutin';
+    mkdir($projectRoot, 0700, true);
+    mkdir($lutinDir, 0700, true);
     
     // No AGENTS.md file
     
-    $cfg = new LutinConfig($webRoot, $dataDir);
+    $cfg = new LutinConfig($projectRoot, $webRoot, $lutinDir);
     $cfg->setProvider('anthropic');
     $cfg->setApiKey('sk-test');
     
-    $fm = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $fm = new LutinFileManager($cfg);
     $agent = new LutinAgent($cfg, $fm);
     
     $reflection = new ReflectionClass($agent);

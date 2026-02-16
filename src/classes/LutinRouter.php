@@ -127,9 +127,14 @@ class LutinRouter {
             return;
         }
 
-        // Set data directory if provided
-        if (!empty($body['data_dir'])) {
-            $this->config->setDataDir($body['data_dir']);
+        // Set project root directory if provided
+        if (!empty($body['project_root'])) {
+            $this->config->setProjectRoot($body['project_root']);
+        }
+
+        // Set web root directory if provided
+        if (!empty($body['web_root'])) {
+            $this->config->setWebRoot($body['web_root']);
         }
 
         // Save configuration

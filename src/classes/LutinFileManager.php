@@ -2,43 +2,53 @@
 declare(strict_types=1);
 
 class LutinFileManager {
-    // Paths that can NEVER be written to, even if they resolve inside webRoot
+    // Paths that can NEVER be written to, even if they resolve inside projectRoot
     private const PROTECTED_PATHS = [
         'lutin.php',
     ];
 
-    private string $webRootDir;    // absolute path to the web root (where website files live)
-    private string $dataDir;       // absolute path to the data directory (backups, config)
     private LutinConfig $config;
 
-    public function __construct(string $webRootDir, string $dataDir, LutinConfig $config) {
-        $this->webRootDir = rtrim($webRootDir, '/');
-        $this->dataDir = rtrim($dataDir, '/');
+    public function __construct(LutinConfig $config) {
         $this->config = $config;
     }
 
     /**
-     * Returns the web root directory (where website files are stored).
+     * Returns the project root directory.
      */
-    public function getWebRoot(): string {
-        return $this->webRootDir;
+    public function getProjectRoot(): string {
+        return $this->config->getProjectRoot();
     }
 
     /**
-     * Resolves $path relative to $webRootDir.
-     * Throws \RuntimeException if the resolved path escapes $webRootDir
-     * or matches a protected path.
+     * Returns the web root directory (where lutin.php lives).
+     */
+    public function getWebRoot(): string {
+        return $this->config->getWebRoot();
+    }
+
+    /**
+     * Returns the lutin directory.
+     */
+    public function getLutinDir(): string {
+        return $this->config->getLutinDir();
+    }
+
+    /**
+     * Resolves $path relative to $projectRootDir.
+     * Throws \RuntimeException if the resolved path escapes $projectRootDir
+     * or matches a protected path OR is inside the lutin directory.
      * Does NOT require the file to exist (for write use-cases).
      * Returns the absolute path.
      */
     public function safePath(string $path): string {
         // Normalize the path to remove . and ..
-        $absolute = realpath($this->webRootDir . '/' . $path);
+        $absolute = realpath($this->config->getProjectRoot() . '/' . $path);
 
         // If realpath fails (path doesn't exist), manually construct and validate
         if ($absolute === false) {
             $parts = array_filter(explode('/', trim($path, '/')), fn($p) => $p !== '' && $p !== '.');
-            $absolute = $this->webRootDir;
+            $absolute = $this->config->getProjectRoot();
             foreach ($parts as $part) {
                 if ($part === '..') {
                     throw new \RuntimeException('Path escape attempt');
@@ -47,8 +57,8 @@ class LutinFileManager {
             }
         }
 
-        // Check if the path escapes webRoot
-        $realRoot = realpath($this->webRootDir);
+        // Check if the path escapes projectRoot
+        $realRoot = realpath($this->config->getProjectRoot());
         if ($realRoot === false) {
             throw new \RuntimeException('Root directory does not exist');
         }
@@ -56,7 +66,15 @@ class LutinFileManager {
             throw new \RuntimeException('Path escape attempt');
         }
 
-        // Check for protected paths (relative to webRoot)
+        // Check if the path is inside the lutin directory (PROTECTED)
+        $realLutinDir = realpath($this->config->getLutinDir());
+        if ($realLutinDir !== false) {
+            if (str_starts_with($absolute, $realLutinDir . '/') || $absolute === $realLutinDir) {
+                throw new \RuntimeException('Access to lutin directory is not allowed');
+            }
+        }
+
+        // Check for protected paths (relative to projectRoot)
         $relative = substr($absolute, strlen($realRoot) + 1);
         if ($this->isProtected($relative)) {
             throw new \RuntimeException('Protected path');
@@ -79,13 +97,34 @@ class LutinFileManager {
     }
 
     /**
-     * Lists $path directory contents (relative to webRoot).
+     * Checks if a path (relative to project root) points to or inside the lutin directory.
+     */
+    private function isLutinDirPath(string $relativePath): bool {
+        $lutinDirName = basename($this->config->getLutinDir());
+        // Handle case where lutin dir is inside project root
+        $realProjectRoot = realpath($this->config->getProjectRoot());
+        $realLutinDir = realpath($this->config->getLutinDir());
+        
+        if ($realLutinDir !== false && $realProjectRoot !== false) {
+            // Check if lutin dir is inside project root
+            if (str_starts_with($realLutinDir, $realProjectRoot . '/')) {
+                $relativeLutinPath = substr($realLutinDir, strlen($realProjectRoot) + 1);
+                return $relativePath === $relativeLutinPath || str_starts_with($relativePath, $relativeLutinPath . '/');
+            }
+        }
+        
+        // Fallback: check by basename match at root level
+        return $relativePath === $lutinDirName || str_starts_with($relativePath, $lutinDirName . '/');
+    }
+
+    /**
+     * Lists $path directory contents (relative to projectRoot).
      * Returns array of ['name' => string, 'type' => 'file'|'dir', 'path' => string (relative)]
-     * Skips lutin.php.
-     * $path defaults to '' (root).
+     * Skips lutin.php and the lutin directory.
+     * $path defaults to '' (project root).
      */
     public function listFiles(string $path = ''): array {
-        $dirPath = $path === '' ? $this->webRootDir : $this->safePath($path);
+        $dirPath = $path === '' ? $this->config->getProjectRoot() : $this->safePath($path);
 
         if (!is_dir($dirPath)) {
             throw new \RuntimeException('Not a directory');
@@ -106,8 +145,14 @@ class LutinFileManager {
                 continue;
             }
 
-            $fullPath = $dirPath . '/' . $item;
             $relPath = $path === '' ? $item : $path . '/' . $item;
+            
+            // Skip the lutin directory
+            if ($this->isLutinDirPath($relPath)) {
+                continue;
+            }
+
+            $fullPath = $dirPath . '/' . $item;
             $isDir = is_dir($fullPath);
 
             $entries[] = [
@@ -121,7 +166,7 @@ class LutinFileManager {
     }
 
     /**
-     * Reads and returns the content of $path (relative to webRoot).
+     * Reads and returns the content of $path (relative to projectRoot).
      * Goes through safePath().
      * Throws on protected path or read error.
      */
@@ -138,7 +183,7 @@ class LutinFileManager {
     }
 
     /**
-     * Writes $content to $path (relative to webRoot).
+     * Writes $content to $path (relative to projectRoot).
      * 1. Calls safePath() — throws on violation.
      * 2. If file exists, creates backup first via createBackup().
      * 3. Creates parent directories if needed (mkdir recursive).
@@ -170,7 +215,7 @@ class LutinFileManager {
      * Returns the absolute path of the backup file created.
      */
     public function createBackup(string $absoluteFilePath): string {
-        $backupDir = $this->dataDir . '/backups';
+        $backupDir = $this->config->getLutinDir() . '/backups';
         if (!is_dir($backupDir)) {
             mkdir($backupDir, 0700, true);
         }
@@ -197,7 +242,7 @@ class LutinFileManager {
      * ]
      */
     public function listBackups(): array {
-        $backupDir = $this->dataDir . '/backups';
+        $backupDir = $this->config->getLutinDir() . '/backups';
         if (!is_dir($backupDir)) {
             return [];
         }
@@ -240,7 +285,7 @@ class LutinFileManager {
     }
 
     /**
-     * Restores $backupAbsolutePath to its original file location (relative to webRoot).
+     * Restores $backupAbsolutePath to its original file location (relative to projectRoot).
      * 1. Derives original path from backup filename (strip timestamp prefix).
      * 2. Creates a new backup of the CURRENT live file before overwriting.
      * 3. Writes backup content to original path.
@@ -257,8 +302,11 @@ class LutinFileManager {
             throw new \RuntimeException('Invalid backup filename format');
         }
         $originalName = $m[1];
-        $originalPath = $this->webRootDir . '/' . $originalName;
-
+        
+        // Reconstruct the original path relative to projectRoot
+        // We need to find where this file currently exists or would exist
+        $originalPath = $this->findOriginalPath($originalName);
+        
         // Create backup of current file before overwriting
         if (file_exists($originalPath)) {
             $this->createBackup($originalPath);
@@ -281,6 +329,29 @@ class LutinFileManager {
         }
 
         return $originalPath;
+    }
+
+    /**
+     * Find the original file path for a restored file.
+     * Tries to locate the file relative to project root, falling back to web root.
+     * Returns the absolute path where the file should be restored.
+     */
+    private function findOriginalPath(string $originalName): string {
+        // First try: look for the file in projectRoot
+        $projectPath = $this->config->getProjectRoot() . '/' . $originalName;
+        if (file_exists($projectPath)) {
+            return $projectPath;
+        }
+        
+        // Second try: look in webRoot (for backwards compatibility)
+        $webPath = $this->config->getWebRoot() . '/' . $originalName;
+        if (file_exists($webPath)) {
+            return $webPath;
+        }
+        
+        // If not found, restore to projectRoot by default
+        // But we need to validate this path is safe
+        return $this->safePath($originalName);
     }
 
     /**
@@ -328,9 +399,9 @@ class LutinFileManager {
             $attempts[] = 'pages/' . $urlPath . '.php';
         }
 
-        // Filter to existing files
+        // Filter to existing files - check relative to webRoot only for URL mapping
         foreach ($attempts as $candidate) {
-            $fullPath = $this->webRootDir . '/' . $candidate;
+            $fullPath = $this->config->getWebRoot() . '/' . $candidate;
             if (file_exists($fullPath) && is_file($fullPath)) {
                 $candidates[] = $candidate;
             }
@@ -347,10 +418,10 @@ class LutinFileManager {
      * 
      * The ZIP structure follows lutin-starters convention:
      * - public/     → Contents go to web root (where lutin.php lives)
-     * - src/        → Goes to sibling of data directory
-     * - data/       → Goes to sibling of data directory  
-     * - lutin/      → Goes to sibling of data directory
-     * - other dirs  → Goes to sibling of data directory
+     * - src/        → Goes to sibling of lutin directory
+     * - data/       → Goes to sibling of lutin directory  
+     * - lutin/      → Goes to sibling of lutin directory
+     * - other dirs  → Goes to sibling of lutin directory
      * 
      * @param string $zipUrl URL to download the ZIP from
      * @param string|null $expectedHash Optional SHA-256 hash for integrity verification
@@ -537,17 +608,17 @@ class LutinFileManager {
      * Copy template files to their appropriate locations.
      * 
      * - public/ → web root
-     * - everything else → sibling of data directory
+     * - everything else → sibling of lutin directory
      */
     private function copyTemplateFiles(string $templateRoot): void {
         // Copy public/ to web root
         $publicDir = $templateRoot . '/public';
         if (is_dir($publicDir)) {
-            $this->recursiveCopy($publicDir, $this->webRootDir);
+            $this->recursiveCopy($publicDir, $this->config->getWebRoot());
         }
 
-        // Copy other directories to sibling of data directory
-        $privateRoot = dirname($this->dataDir);
+        // Copy other directories to sibling of lutin directory (i.e., project root)
+        $privateRoot = dirname($this->config->getLutinDir());
         $entries = scandir($templateRoot);
         if ($entries !== false) {
             foreach ($entries as $entry) {
