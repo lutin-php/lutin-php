@@ -95,6 +95,34 @@ class LutinConfig {
                !isset($this->data['provider']);
     }
 
+    /**
+     * Returns true when template has not been selected yet.
+     * This is true after setup until user chooses a template or "empty project".
+     */
+    public function needsTemplateSelection(): bool {
+        // If first run, we haven't even done setup yet
+        if ($this->isFirstRun()) {
+            return false;
+        }
+        // Check if template selection has been made
+        return !isset($this->data['template_selected']);
+    }
+
+    /**
+     * Mark template selection as complete.
+     */
+    public function setTemplateSelected(?string $templateId = null): void {
+        $this->data['template_selected'] = true;
+        $this->data['template_id'] = $templateId ?: 'empty';
+    }
+
+    /**
+     * Get the selected template ID.
+     */
+    public function getTemplateId(): ?string {
+        return $this->data['template_id'] ?? null;
+    }
+
     // Typed getters (return null if key absent)
     public function getPasswordHash(): ?string {
         return $this->data['password_hash'] ?? null;

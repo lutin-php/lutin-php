@@ -746,6 +746,121 @@ function initLogin() {
   });
 }
 
+// ── TEMPLATE SELECTION ───────────────────────────────────────────────────────
+function initTemplates() {
+  const templatesGrid = document.getElementById('templates-grid');
+  if (!templatesGrid) return;
+
+  // Load available templates
+  loadTemplates();
+
+  // Add click handlers for template selection
+  templatesGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.select-template-btn');
+    if (!btn) return;
+
+    const templateId = btn.dataset.templateId;
+    const templateCard = btn.closest('.template-card');
+    const zipUrl = templateCard?.dataset.zipUrl;
+    const hash = templateCard?.dataset.hash;
+
+    installTemplate(templateId, zipUrl, hash);
+  });
+}
+
+async function loadTemplates() {
+  const loadingEl = document.getElementById('templates-loading');
+  const errorEl = document.getElementById('templates-error');
+  const gridEl = document.getElementById('templates-grid');
+
+  try {
+    const result = await apiGet('templates');
+    
+    if (result.ok && result.data.templates) {
+      // Add template cards
+      for (const template of result.data.templates) {
+        addTemplateCard(template);
+      }
+    }
+
+    // Show the grid (even if empty, since we have "Empty Project" option)
+    loadingEl.style.display = 'none';
+    gridEl.style.display = 'grid';
+
+    if (result.data.error) {
+      console.warn('Template loading issue:', result.data.error);
+    }
+  } catch (error) {
+    console.error('Failed to load templates:', error);
+    loadingEl.style.display = 'none';
+    errorEl.style.display = 'block';
+    gridEl.style.display = 'grid';
+  }
+}
+
+function addTemplateCard(template) {
+  const gridEl = document.getElementById('templates-grid');
+  if (!gridEl) return;
+
+  const article = document.createElement('article');
+  article.className = 'template-card';
+  article.dataset.templateId = template.id;
+  article.dataset.zipUrl = template.download_url || '';
+  article.dataset.hash = template.hash || '';
+  article.style.cssText = 'cursor: pointer; border: 2px solid transparent;';
+
+  const name = escapeHtml(template.name || template.id);
+  const description = escapeHtml(template.description || 'A starter template for your project.');
+
+  article.innerHTML = `
+    <h3>${name}</h3>
+    <p>${description}</p>
+    <button type="button" class="select-template-btn" data-template-id="${escapeHtml(template.id)}">Select Template</button>
+  `;
+
+  // Insert before the last child (the Empty Project option should stay first)
+  const emptyCard = gridEl.querySelector('[data-template-id=""]');
+  if (emptyCard && emptyCard.nextElementSibling) {
+    gridEl.insertBefore(article, emptyCard.nextElementSibling);
+  } else {
+    gridEl.appendChild(article);
+  }
+}
+
+async function installTemplate(templateId, zipUrl, hash) {
+  const installingEl = document.getElementById('template-installing');
+  const gridEl = document.getElementById('templates-grid');
+
+  // Show installing state
+  if (installingEl) installingEl.style.display = 'block';
+  if (gridEl) gridEl.style.opacity = '0.5';
+
+  try {
+    const result = await apiPost('install_template', {
+      template_id: templateId,
+      zip_url: zipUrl,
+      hash: hash,
+    });
+
+    if (result.ok) {
+      showToast(templateId ? 'Template installed successfully!' : 'Starting with empty project', 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      const errorMsg = result.error || 'Unknown error';
+      console.error('[Lutin] Template installation failed:', errorMsg);
+      console.error('[Lutin] Template ID:', templateId, 'ZIP URL:', zipUrl);
+      showToast('Installation failed: ' + errorMsg, 'error');
+      if (installingEl) installingEl.style.display = 'none';
+      if (gridEl) gridEl.style.opacity = '1';
+    }
+  } catch (error) {
+    console.error('[Lutin] Template installation error:', error);
+    showToast('Installation error: ' + error.message, 'error');
+    if (installingEl) installingEl.style.display = 'none';
+    if (gridEl) gridEl.style.opacity = '1';
+  }
+}
+
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initSetup();
@@ -756,6 +871,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initFileTree();
   initConfig();
   initUrlLookup();
+  initTemplates();
 });
 
 // Make showTab globally accessible for inline onclick handlers

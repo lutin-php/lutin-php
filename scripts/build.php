@@ -16,12 +16,13 @@ $classFiles = [
 ];
 
 $viewFiles = [
-    'layout'       => 'src/views/layout.php',
-    'setup_wizard' => 'src/views/setup_wizard.php',
-    'login'        => 'src/views/login.php',
-    'tab_chat'     => 'src/views/tab_chat.php',
-    'tab_editor'   => 'src/views/tab_editor.php',
-    'tab_config'   => 'src/views/tab_config.php',
+    'layout'        => 'src/views/layout.php',
+    'setup_wizard'  => 'src/views/setup_wizard.php',
+    'login'         => 'src/views/login.php',
+    'tab_chat'      => 'src/views/tab_chat.php',
+    'tab_editor'    => 'src/views/tab_editor.php',
+    'tab_config'    => 'src/views/tab_config.php',
+    'tab_templates' => 'src/views/tab_templates.php',
 ];
 
 $jsFile    = 'src/assets/app.js';

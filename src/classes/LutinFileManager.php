@@ -339,4 +339,299 @@ class LutinFileManager {
         // Remove duplicates while preserving order
         return array_unique($candidates);
     }
+
+    // ── Template Installation ───────────────────────────────────────────────────
+
+    /**
+     * Downloads and installs a starter template from a ZIP URL.
+     * 
+     * The ZIP structure follows lutin-starters convention:
+     * - public/     → Contents go to web root (where lutin.php lives)
+     * - src/        → Goes to sibling of data directory
+     * - data/       → Goes to sibling of data directory  
+     * - lutin/      → Goes to sibling of data directory
+     * - other dirs  → Goes to sibling of data directory
+     * 
+     * @param string $zipUrl URL to download the ZIP from
+     * @param string|null $expectedHash Optional SHA-256 hash for integrity verification
+     * @throws \RuntimeException on error
+     */
+    public function installTemplate(string $zipUrl, ?string $expectedHash = null): void {
+        $tempDir = $this->config->getTempDir();
+        if (!is_dir($tempDir)) {
+            mkdir($tempDir, 0700, true);
+        }
+
+        $zipPath = $tempDir . '/template_' . uniqid() . '.zip';
+        $extractDir = $tempDir . '/template_' . uniqid() . '_extracted';
+
+        $success = false;
+        try {
+            // Download the ZIP
+            $this->downloadFile($zipUrl, $zipPath);
+            
+            // Verify downloaded file is a valid ZIP
+            $fileSize = filesize($zipPath);
+            $handle = fopen($zipPath, 'rb');
+            $magic = fread($handle, 4);
+            fclose($handle);
+            if ($magic !== "PK\x03\x04") {
+                throw new \RuntimeException("Downloaded file is not a valid ZIP (magic bytes: " . bin2hex($magic) . ", size: {$fileSize})");
+            }
+
+            // Verify hash if provided
+            if ($expectedHash !== null) {
+                $actualHash = hash_file('sha256', $zipPath);
+                // Strip 'sha256-' prefix if present (build-zips.php format)
+                $expectedHash = str_starts_with($expectedHash, 'sha256-') 
+                    ? substr($expectedHash, 7) 
+                    : $expectedHash;
+                if ($actualHash !== $expectedHash) {
+                    throw new \RuntimeException('Template hash verification failed');
+                }
+            }
+
+            // Extract the ZIP
+            $this->extractZip($zipPath, $extractDir);
+
+            // Find the actual template root (might be nested inside a folder)
+            $templateRoot = $this->findTemplateRoot($extractDir);
+            if ($templateRoot === null) {
+                // Debug: list what was extracted
+                $extractedContents = $this->listDirForDebug($extractDir);
+                throw new \RuntimeException(
+                    'Invalid template structure: no public/ folder found. ' .
+                    "Extracted to: {$extractDir}. Contents: " . json_encode($extractedContents)
+                );
+            }
+
+            // Install the template
+            $this->copyTemplateFiles($templateRoot);
+            $success = true;
+
+        } finally {
+            // Cleanup only on success
+            if ($success) {
+                $this->recursiveDelete($zipPath);
+                $this->recursiveDelete($extractDir);
+            }
+            // On failure, files are left for debugging
+        }
+    }
+
+    /**
+     * Download a file from URL to local path.
+     */
+    private function downloadFile(string $url, string $localPath): void {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new \RuntimeException('Failed to initialize download');
+        }
+
+        $fp = fopen($localPath, 'wb');
+        if ($fp === false) {
+            curl_close($ch);
+            throw new \RuntimeException('Failed to create local file for download');
+        }
+
+        curl_setopt($ch, CURLOPT_FILE, $fp);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+        $success = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        fclose($fp);
+
+        if (!$success) {
+            unlink($localPath);
+            throw new \RuntimeException('Download failed: ' . curl_error($ch));
+        }
+
+        if ($httpCode !== 200) {
+            unlink($localPath);
+            throw new \RuntimeException('Download failed: HTTP ' . $httpCode);
+        }
+    }
+
+    /**
+     * Extract a ZIP file to a directory.
+     */
+    private function extractZip(string $zipPath, string $extractDir): void {
+        if (!class_exists('ZipArchive')) {
+            throw new \RuntimeException('ZIP extension not available');
+        }
+
+        $zip = new \ZipArchive();
+        $result = $zip->open($zipPath);
+        if ($result !== true) {
+            throw new \RuntimeException('Failed to open ZIP file: error code ' . $result);
+        }
+
+        if (!is_dir($extractDir)) {
+            mkdir($extractDir, 0755, true);
+        }
+
+        $zip->extractTo($extractDir);
+        $zip->close();
+    }
+
+    /**
+     * Find the template root directory (containing public/ folder).
+     * Returns null if no valid structure found.
+     */
+    private function findTemplateRoot(string $extractDir): ?string {
+        // Direct match: extracted/public exists
+        if (is_dir($extractDir . '/public')) {
+            return $extractDir;
+        }
+
+        // Look for a subdirectory containing public/
+        $entries = scandir($extractDir);
+        if ($entries === false) {
+            return null;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $extractDir . '/' . $entry;
+            if (is_dir($path) && is_dir($path . '/public')) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * List directory contents for debugging purposes.
+     * Returns array of entries with their types.
+     */
+    private function listDirForDebug(string $dir, int $depth = 0): array {
+        if ($depth > 2) {
+            return ['(max depth reached)'];
+        }
+        $entries = scandir($dir);
+        if ($entries === false) {
+            return ['(cannot read directory)'];
+        }
+        $result = [];
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path)) {
+                $result[$entry . '/'] = $depth < 2 ? $this->listDirForDebug($path, $depth + 1) : '(dir)';
+            } else {
+                $result[] = $entry;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Copy template files to their appropriate locations.
+     * 
+     * - public/ → web root
+     * - everything else → sibling of data directory
+     */
+    private function copyTemplateFiles(string $templateRoot): void {
+        // Copy public/ to web root
+        $publicDir = $templateRoot . '/public';
+        if (is_dir($publicDir)) {
+            $this->recursiveCopy($publicDir, $this->webRootDir);
+        }
+
+        // Copy other directories to sibling of data directory
+        $privateRoot = dirname($this->dataDir);
+        $entries = scandir($templateRoot);
+        if ($entries !== false) {
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..' || $entry === 'public') {
+                    continue;
+                }
+                $srcPath = $templateRoot . '/' . $entry;
+                if (is_dir($srcPath)) {
+                    $destPath = $privateRoot . '/' . $entry;
+                    $this->recursiveCopy($srcPath, $destPath);
+                }
+            }
+        }
+    }
+
+    /**
+     * Recursively copy a directory or file.
+     */
+    private function recursiveCopy(string $src, string $dst): void {
+        if (is_file($src)) {
+            // Skip lutin.php protection
+            if (basename($src) === 'lutin.php') {
+                return;
+            }
+            $dir = dirname($dst);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+            copy($src, $dst);
+            return;
+        }
+
+        if (!is_dir($dst)) {
+            mkdir($dst, 0755, true);
+        }
+
+        $entries = scandir($src);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $srcPath = $src . '/' . $entry;
+            $dstPath = $dst . '/' . $entry;
+
+            // Skip lutin.php
+            if ($entry === 'lutin.php') {
+                continue;
+            }
+
+            if (is_dir($srcPath)) {
+                $this->recursiveCopy($srcPath, $dstPath);
+            } else {
+                copy($srcPath, $dstPath);
+            }
+        }
+    }
+
+    /**
+     * Recursively delete a file or directory.
+     */
+    private function recursiveDelete(string $path): void {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        if (is_file($path) || is_link($path)) {
+            unlink($path);
+            return;
+        }
+
+        $entries = scandir($path);
+        if ($entries !== false) {
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+                $this->recursiveDelete($path . '/' . $entry);
+            }
+        }
+
+        rmdir($path);
+    }
 }

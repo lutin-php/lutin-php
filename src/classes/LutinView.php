@@ -30,6 +30,12 @@ class LutinView {
         });
     }
 
+    public function renderTemplateSelection(): void {
+        $this->renderLayout('templates', function() {
+            echo $this->getViewContent('tab_templates');
+        });
+    }
+
     /**
      * Outputs the layout wrapper and calls $contentCallback to emit tab content.
      */

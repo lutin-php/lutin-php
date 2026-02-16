@@ -42,7 +42,11 @@ $tests = [];
 
 // Test: Setup wizard shows tab-setup visible
 $tests['LutinView::renderSetupWizard (tab visible)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site1');
+    $webRoot = $scratch . '/site1/web';
+    $dataDir = $scratch . '/site1/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);
@@ -60,7 +64,11 @@ $tests['LutinView::renderSetupWizard (tab visible)'] = function() use ($scratch)
 
 // Test: Login page shows tab-login visible
 $tests['LutinView::renderLogin (tab visible)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site2');
+    $webRoot = $scratch . '/site2/web';
+    $dataDir = $scratch . '/site2/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);
@@ -78,9 +86,11 @@ $tests['LutinView::renderLogin (tab visible)'] = function() use ($scratch) {
 
 // Test: App page shows tab-chat visible (and others hidden)
 $tests['LutinView::renderApp (tab-chat visible)'] = function() use ($scratch) {
-    $dir = $scratch . '/site3';
-    mkdir($dir);
-    $config = new LutinConfig($dir);
+    $webRoot = $scratch . '/site3/web';
+    $dataDir = $scratch . '/site3/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('sk-test');
@@ -108,7 +118,11 @@ $tests['LutinView::renderApp (tab-chat visible)'] = function() use ($scratch) {
 
 // Test: Setup wizard doesn't show other tabs
 $tests['LutinView::renderSetupWizard (other tabs hidden)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site4');
+    $webRoot = $scratch . '/site4/web';
+    $dataDir = $scratch . '/site4/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);
@@ -125,7 +139,11 @@ $tests['LutinView::renderSetupWizard (other tabs hidden)'] = function() use ($sc
 
 // Test: CSRF token is present
 $tests['LutinView::renderSetupWizard (CSRF token present)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site5');
+    $webRoot = $scratch . '/site5/web';
+    $dataDir = $scratch . '/site5/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);
@@ -140,9 +158,11 @@ $tests['LutinView::renderSetupWizard (CSRF token present)'] = function() use ($s
 
 // Test: CodeMirror libraries are loaded
 $tests['LutinView::renderApp (CodeMirror loaded)'] = function() use ($scratch) {
-    $dir = $scratch . '/site6';
-    mkdir($dir);
-    $config = new LutinConfig($dir);
+    $webRoot = $scratch . '/site6/web';
+    $dataDir = $scratch . '/site6/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('sk-test');
@@ -163,9 +183,11 @@ $tests['LutinView::renderApp (CodeMirror loaded)'] = function() use ($scratch) {
 
 // Test: App page shows nav (app tabs only)
 $tests['LutinView::renderApp (nav visible)'] = function() use ($scratch) {
-    $dir = $scratch . '/site7';
-    mkdir($dir);
-    $config = new LutinConfig($dir);
+    $webRoot = $scratch . '/site7/web';
+    $dataDir = $scratch . '/site7/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $config->setPasswordHash(password_hash('test', PASSWORD_BCRYPT));
     $config->setProvider('anthropic');
     $config->setApiKey('sk-test');
@@ -188,7 +210,11 @@ $tests['LutinView::renderApp (nav visible)'] = function() use ($scratch) {
 
 // Test: Setup wizard doesn't show nav (not an app page)
 $tests['LutinView::renderSetupWizard (nav hidden)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site8');
+    $webRoot = $scratch . '/site8/web';
+    $dataDir = $scratch . '/site8/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);
@@ -206,7 +232,11 @@ $tests['LutinView::renderSetupWizard (nav hidden)'] = function() use ($scratch) 
 
 // Test: Login page doesn't show nav (not an app page)
 $tests['LutinView::renderLogin (nav hidden)'] = function() use ($scratch) {
-    $config = new LutinConfig($scratch . '/site9');
+    $webRoot = $scratch . '/site9/web';
+    $dataDir = $scratch . '/site9/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    $config = new LutinConfig($webRoot, $dataDir);
     $auth = new LutinAuth($config);
     $auth->startSession();
     $view = new LutinView($config, $auth);

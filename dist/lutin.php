@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-02-16 08:33:34
+// Built: 2026-02-16 22:53:18
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -98,6 +98,34 @@ class LutinConfig {
         return empty($this->data) ||
                !isset($this->data['password_hash']) ||
                !isset($this->data['provider']);
+    }
+
+    /**
+     * Returns true when template has not been selected yet.
+     * This is true after setup until user chooses a template or "empty project".
+     */
+    public function needsTemplateSelection(): bool {
+        // If first run, we haven't even done setup yet
+        if ($this->isFirstRun()) {
+            return false;
+        }
+        // Check if template selection has been made
+        return !isset($this->data['template_selected']);
+    }
+
+    /**
+     * Mark template selection as complete.
+     */
+    public function setTemplateSelected(?string $templateId = null): void {
+        $this->data['template_selected'] = true;
+        $this->data['template_id'] = $templateId ?: 'empty';
+    }
+
+    /**
+     * Get the selected template ID.
+     */
+    public function getTemplateId(): ?string {
+        return $this->data['template_id'] ?? null;
     }
 
     // Typed getters (return null if key absent)
@@ -571,6 +599,301 @@ class LutinFileManager {
         // Remove duplicates while preserving order
         return array_unique($candidates);
     }
+
+    // ── Template Installation ───────────────────────────────────────────────────
+
+    /**
+     * Downloads and installs a starter template from a ZIP URL.
+     * 
+     * The ZIP structure follows lutin-starters convention:
+     * - public/     → Contents go to web root (where lutin.php lives)
+     * - src/        → Goes to sibling of data directory
+     * - data/       → Goes to sibling of data directory  
+     * - lutin/      → Goes to sibling of data directory
+     * - other dirs  → Goes to sibling of data directory
+     * 
+     * @param string $zipUrl URL to download the ZIP from
+     * @param string|null $expectedHash Optional SHA-256 hash for integrity verification
+     * @throws \RuntimeException on error
+     */
+    public function installTemplate(string $zipUrl, ?string $expectedHash = null): void {
+        $tempDir = $this->config->getTempDir();
+        if (!is_dir($tempDir)) {
+            mkdir($tempDir, 0700, true);
+        }
+
+        $zipPath = $tempDir . '/template_' . uniqid() . '.zip';
+        $extractDir = $tempDir . '/template_' . uniqid() . '_extracted';
+
+        $success = false;
+        try {
+            // Download the ZIP
+            $this->downloadFile($zipUrl, $zipPath);
+            
+            // Verify downloaded file is a valid ZIP
+            $fileSize = filesize($zipPath);
+            $handle = fopen($zipPath, 'rb');
+            $magic = fread($handle, 4);
+            fclose($handle);
+            if ($magic !== "PK\x03\x04") {
+                throw new \RuntimeException("Downloaded file is not a valid ZIP (magic bytes: " . bin2hex($magic) . ", size: {$fileSize})");
+            }
+
+            // Verify hash if provided
+            if ($expectedHash !== null) {
+                $actualHash = hash_file('sha256', $zipPath);
+                // Strip 'sha256-' prefix if present (build-zips.php format)
+                $expectedHash = str_starts_with($expectedHash, 'sha256-') 
+                    ? substr($expectedHash, 7) 
+                    : $expectedHash;
+                if ($actualHash !== $expectedHash) {
+                    throw new \RuntimeException('Template hash verification failed');
+                }
+            }
+
+            // Extract the ZIP
+            $this->extractZip($zipPath, $extractDir);
+
+            // Find the actual template root (might be nested inside a folder)
+            $templateRoot = $this->findTemplateRoot($extractDir);
+            if ($templateRoot === null) {
+                // Debug: list what was extracted
+                $extractedContents = $this->listDirForDebug($extractDir);
+                throw new \RuntimeException(
+                    'Invalid template structure: no public/ folder found. ' .
+                    "Extracted to: {$extractDir}. Contents: " . json_encode($extractedContents)
+                );
+            }
+
+            // Install the template
+            $this->copyTemplateFiles($templateRoot);
+            $success = true;
+
+        } finally {
+            // Cleanup only on success
+            if ($success) {
+                $this->recursiveDelete($zipPath);
+                $this->recursiveDelete($extractDir);
+            }
+            // On failure, files are left for debugging
+        }
+    }
+
+    /**
+     * Download a file from URL to local path.
+     */
+    private function downloadFile(string $url, string $localPath): void {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new \RuntimeException('Failed to initialize download');
+        }
+
+        $fp = fopen($localPath, 'wb');
+        if ($fp === false) {
+            curl_close($ch);
+            throw new \RuntimeException('Failed to create local file for download');
+        }
+
+        curl_setopt($ch, CURLOPT_FILE, $fp);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+        $success = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        fclose($fp);
+
+        if (!$success) {
+            unlink($localPath);
+            throw new \RuntimeException('Download failed: ' . curl_error($ch));
+        }
+
+        if ($httpCode !== 200) {
+            unlink($localPath);
+            throw new \RuntimeException('Download failed: HTTP ' . $httpCode);
+        }
+    }
+
+    /**
+     * Extract a ZIP file to a directory.
+     */
+    private function extractZip(string $zipPath, string $extractDir): void {
+        if (!class_exists('ZipArchive')) {
+            throw new \RuntimeException('ZIP extension not available');
+        }
+
+        $zip = new \ZipArchive();
+        $result = $zip->open($zipPath);
+        if ($result !== true) {
+            throw new \RuntimeException('Failed to open ZIP file: error code ' . $result);
+        }
+
+        if (!is_dir($extractDir)) {
+            mkdir($extractDir, 0755, true);
+        }
+
+        $zip->extractTo($extractDir);
+        $zip->close();
+    }
+
+    /**
+     * Find the template root directory (containing public/ folder).
+     * Returns null if no valid structure found.
+     */
+    private function findTemplateRoot(string $extractDir): ?string {
+        // Direct match: extracted/public exists
+        if (is_dir($extractDir . '/public')) {
+            return $extractDir;
+        }
+
+        // Look for a subdirectory containing public/
+        $entries = scandir($extractDir);
+        if ($entries === false) {
+            return null;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $extractDir . '/' . $entry;
+            if (is_dir($path) && is_dir($path . '/public')) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * List directory contents for debugging purposes.
+     * Returns array of entries with their types.
+     */
+    private function listDirForDebug(string $dir, int $depth = 0): array {
+        if ($depth > 2) {
+            return ['(max depth reached)'];
+        }
+        $entries = scandir($dir);
+        if ($entries === false) {
+            return ['(cannot read directory)'];
+        }
+        $result = [];
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path)) {
+                $result[$entry . '/'] = $depth < 2 ? $this->listDirForDebug($path, $depth + 1) : '(dir)';
+            } else {
+                $result[] = $entry;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Copy template files to their appropriate locations.
+     * 
+     * - public/ → web root
+     * - everything else → sibling of data directory
+     */
+    private function copyTemplateFiles(string $templateRoot): void {
+        // Copy public/ to web root
+        $publicDir = $templateRoot . '/public';
+        if (is_dir($publicDir)) {
+            $this->recursiveCopy($publicDir, $this->webRootDir);
+        }
+
+        // Copy other directories to sibling of data directory
+        $privateRoot = dirname($this->dataDir);
+        $entries = scandir($templateRoot);
+        if ($entries !== false) {
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..' || $entry === 'public') {
+                    continue;
+                }
+                $srcPath = $templateRoot . '/' . $entry;
+                if (is_dir($srcPath)) {
+                    $destPath = $privateRoot . '/' . $entry;
+                    $this->recursiveCopy($srcPath, $destPath);
+                }
+            }
+        }
+    }
+
+    /**
+     * Recursively copy a directory or file.
+     */
+    private function recursiveCopy(string $src, string $dst): void {
+        if (is_file($src)) {
+            // Skip lutin.php protection
+            if (basename($src) === 'lutin.php') {
+                return;
+            }
+            $dir = dirname($dst);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+            copy($src, $dst);
+            return;
+        }
+
+        if (!is_dir($dst)) {
+            mkdir($dst, 0755, true);
+        }
+
+        $entries = scandir($src);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $srcPath = $src . '/' . $entry;
+            $dstPath = $dst . '/' . $entry;
+
+            // Skip lutin.php
+            if ($entry === 'lutin.php') {
+                continue;
+            }
+
+            if (is_dir($srcPath)) {
+                $this->recursiveCopy($srcPath, $dstPath);
+            } else {
+                copy($srcPath, $dstPath);
+            }
+        }
+    }
+
+    /**
+     * Recursively delete a file or directory.
+     */
+    private function recursiveDelete(string $path): void {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        if (is_file($path) || is_link($path)) {
+            unlink($path);
+            return;
+        }
+
+        $entries = scandir($path);
+        if ($entries !== false) {
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+                $this->recursiveDelete($path . '/' . $entry);
+            }
+        }
+
+        rmdir($path);
+    }
 }
 
 // ── LutinAgent.php ─────
@@ -582,8 +905,10 @@ interface LutinProviderAdapter {
      *   - A text delta:   "data: " . json_encode(['type'=>'text','delta'=>'...']) . "\n\n"
      *   - A tool call:    "data: " . json_encode(['type'=>'tool_call','name'=>'...','input'=>[...],'id'=>'...']) . "\n\n"
      *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
+     * 
+     * @param string $systemPrompt The system prompt to use (combines base prompt + AGENTS.md if present)
      */
-    public function stream(array $messages, array $tools): \Generator;
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
 }
 
 class AnthropicAdapter implements LutinProviderAdapter {
@@ -595,16 +920,19 @@ class AnthropicAdapter implements LutinProviderAdapter {
         $this->model = $model;
     }
 
-    public function stream(array $messages, array $tools): \Generator {
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator {
         $url = 'https://api.anthropic.com/v1/messages';
+
+        // Use provided system prompt or fall back to default
+        $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
 
         $payload = [
             'model' => $this->model,
             'max_tokens' => 8192,
-            'system' => 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-                'You can read files, list directories, and write files on the server. ' .
-                'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
-                'When asked to create or modify a page, read the existing files first to understand the structure.',
+            'system' => $system,
             'messages' => $messages,
             'tools' => $tools,
         ];
@@ -686,12 +1014,24 @@ class OpenAIAdapter implements LutinProviderAdapter {
         $this->model = $model;
     }
 
-    public function stream(array $messages, array $tools): \Generator {
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator {
         $url = 'https://api.openai.com/v1/chat/completions';
+
+        // Use provided system prompt or fall back to default
+        $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
+
+        // Prepend system message to messages array
+        $fullMessages = array_merge(
+            [['role' => 'system', 'content' => $system]],
+            $messages
+        );
 
         $payload = [
             'model' => $this->model,
-            'messages' => $messages,
+            'messages' => $fullMessages,
             'tools' => $tools,
             'tool_choice' => 'auto',
         ];
@@ -786,11 +1126,42 @@ class LutinAgent {
     // Tool definitions sent to the API
     private array $toolDefinitions;
 
+    // Cached system prompt (base + AGENTS.md if present)
+    private ?string $systemPrompt = null;
+
     public function __construct(LutinConfig $config, LutinFileManager $fm) {
         $this->config = $config;
         $this->fm = $fm;
         $this->adapter = $this->buildAdapter();
         $this->toolDefinitions = $this->buildToolDefinitions();
+    }
+
+    /**
+     * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
+     * The AGENTS.md file is read from the data directory (outside web root).
+     */
+    private function buildSystemPrompt(): string {
+        if ($this->systemPrompt !== null) {
+            return $this->systemPrompt;
+        }
+
+        $basePrompt = 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
+
+        $dataDir = $this->config->getDataDir();
+        $agentsMdPath = $dataDir . '/AGENTS.md';
+
+        if (file_exists($agentsMdPath) && is_readable($agentsMdPath)) {
+            $agentsContent = file_get_contents($agentsMdPath);
+            if ($agentsContent !== false) {
+                $basePrompt .= "\n\n---\n\nThe following is additional context about this specific project from AGENTS.md:\n\n" . $agentsContent;
+            }
+        }
+
+        $this->systemPrompt = $basePrompt;
+        return $basePrompt;
     }
 
     /**
@@ -909,7 +1280,8 @@ class LutinAgent {
         }
 
         try {
-            $generator = $this->adapter->stream($this->messages, $this->toolDefinitions);
+            $systemPrompt = $this->buildSystemPrompt();
+            $generator = $this->adapter->stream($this->messages, $this->toolDefinitions, $systemPrompt);
 
             $assistantContent = [];
             $textBuffer = '';
@@ -1118,6 +1490,13 @@ class LutinRouter {
                 $this->requireAuth();
                 $this->requireCsrf();
                 $this->handleConfigSave();
+            } elseif ($method === 'GET' && $action === 'templates') {
+                $this->requireAuth();
+                $this->handleTemplatesList();
+            } elseif ($method === 'POST' && $action === 'install_template') {
+                $this->requireAuth();
+                $this->requireCsrf();
+                $this->handleInstallTemplate();
             } else {
                 $this->jsonError('Unknown action', 404);
             }
@@ -1133,6 +1512,8 @@ class LutinRouter {
             $this->view->renderSetupWizard();
         } elseif (!$this->auth->isAuthenticated()) {
             $this->view->renderLogin();
+        } elseif ($this->config->needsTemplateSelection()) {
+            $this->view->renderTemplateSelection();
         } else {
             $this->view->renderApp();
         }
@@ -1303,6 +1684,132 @@ class LutinRouter {
         }
     }
 
+    private function handleTemplatesList(): void {
+        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-starters/main/starters.json';
+        $cacheDir = $this->config->getTempDir();
+        $cacheFile = $cacheDir . '/starters.json';
+        $maxAge = 86400; // 1 day in seconds
+
+        // Ensure cache directory exists
+        if (!is_dir($cacheDir)) {
+            mkdir($cacheDir, 0700, true);
+        }
+
+        // Check if we need to fetch fresh data
+        $needsFetch = true;
+        $cachedData = null;
+        
+        if (file_exists($cacheFile)) {
+            $age = time() - filemtime($cacheFile);
+            $cachedData = file_get_contents($cacheFile);
+            if ($age < $maxAge && $cachedData !== false) {
+                $needsFetch = false;
+            }
+        }
+
+        $response = null;
+        $fetchError = null;
+        $httpCode = 0;
+        
+        if ($needsFetch) {
+            $ch = curl_init($manifestUrl);
+            if ($ch === false) {
+                $fetchError = 'Failed to initialize curl';
+            } else {
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlError = curl_error($ch);
+                curl_close($ch);
+
+                if ($httpCode === 200 && $response !== false) {
+                    // Cache the successful response
+                    file_put_contents($cacheFile, $response);
+                } else {
+                    $fetchError = 'HTTP ' . $httpCode;
+                    if ($curlError) {
+                        $fetchError .= ' (' . $curlError . ')';
+                    }
+                    // Fall back to cached data if available (even if old)
+                    if ($cachedData === null && file_exists($cacheFile)) {
+                        $cachedData = file_get_contents($cacheFile);
+                    }
+                }
+            }
+        }
+
+        // Use cached data if fetch failed or wasn't needed
+        if ($response === null || $response === false) {
+            $response = $cachedData;
+        }
+
+        if ($response === null || $response === false || empty($response)) {
+            $this->jsonOk([
+                'templates' => [], 
+                'error' => 'Failed to fetch templates' . ($fetchError ? ': ' . $fetchError : ''),
+                'http_code' => $httpCode,
+                'cache_file' => $cacheFile,
+                'cache_exists' => file_exists($cacheFile)
+            ]);
+            return;
+        }
+
+        try {
+            $manifest = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
+            $templates = $manifest['starters'] ?? [];
+            $this->jsonOk([
+                'templates' => $templates,
+                'cached' => !$needsFetch,
+                'fetch_error' => $fetchError,
+                'http_code' => $httpCode,
+                'cache_file' => $cacheFile
+            ]);
+        } catch (\JsonException $e) {
+            // Save bad response for debugging
+            file_put_contents($cacheFile . '.error', $response);
+            $this->jsonOk([
+                'templates' => [], 
+                'error' => 'Invalid template data: ' . $e->getMessage(),
+                'response_preview' => substr($response, 0, 200)
+            ]);
+        }
+    }
+
+    private function handleInstallTemplate(): void {
+        $body = $this->getBody();
+        $templateId = $body['template_id'] ?? null;
+
+        // Empty project (no template)
+        if ($templateId === null || $templateId === '') {
+            $this->config->setTemplateSelected(null);
+            $this->config->save();
+            $this->jsonOk(['installed' => true, 'template_id' => null]);
+            return;
+        }
+
+        // Install a specific template
+        $zipUrl = $body['zip_url'] ?? null;
+        $hash = $body['hash'] ?? null;
+
+        if (empty($zipUrl)) {
+            $this->jsonError('Template download URL required', 400);
+            return;
+        }
+
+        try {
+            $this->fm->installTemplate($zipUrl, $hash);
+            $this->config->setTemplateSelected($templateId);
+            $this->config->save();
+            $this->jsonOk(['installed' => true, 'template_id' => $templateId]);
+        } catch (\Throwable $e) {
+            $this->jsonError('Template installation failed: ' . $e->getMessage(), 500);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function jsonOk(mixed $data): void {
@@ -1366,6 +1873,12 @@ class LutinView {
             echo $this->getViewContent('tab_chat');
             echo $this->getViewContent('tab_editor');
             echo $this->getViewContent('tab_config');
+        });
+    }
+
+    public function renderTemplateSelection(): void {
+        $this->renderLayout('templates', function() {
+            echo $this->getViewContent('tab_templates');
         });
     }
 
@@ -2174,6 +2687,121 @@ function initLogin() {
   });
 }
 
+// ── TEMPLATE SELECTION ───────────────────────────────────────────────────────
+function initTemplates() {
+  const templatesGrid = document.getElementById('templates-grid');
+  if (!templatesGrid) return;
+
+  // Load available templates
+  loadTemplates();
+
+  // Add click handlers for template selection
+  templatesGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.select-template-btn');
+    if (!btn) return;
+
+    const templateId = btn.dataset.templateId;
+    const templateCard = btn.closest('.template-card');
+    const zipUrl = templateCard?.dataset.zipUrl;
+    const hash = templateCard?.dataset.hash;
+
+    installTemplate(templateId, zipUrl, hash);
+  });
+}
+
+async function loadTemplates() {
+  const loadingEl = document.getElementById('templates-loading');
+  const errorEl = document.getElementById('templates-error');
+  const gridEl = document.getElementById('templates-grid');
+
+  try {
+    const result = await apiGet('templates');
+    
+    if (result.ok && result.data.templates) {
+      // Add template cards
+      for (const template of result.data.templates) {
+        addTemplateCard(template);
+      }
+    }
+
+    // Show the grid (even if empty, since we have "Empty Project" option)
+    loadingEl.style.display = 'none';
+    gridEl.style.display = 'grid';
+
+    if (result.data.error) {
+      console.warn('Template loading issue:', result.data.error);
+    }
+  } catch (error) {
+    console.error('Failed to load templates:', error);
+    loadingEl.style.display = 'none';
+    errorEl.style.display = 'block';
+    gridEl.style.display = 'grid';
+  }
+}
+
+function addTemplateCard(template) {
+  const gridEl = document.getElementById('templates-grid');
+  if (!gridEl) return;
+
+  const article = document.createElement('article');
+  article.className = 'template-card';
+  article.dataset.templateId = template.id;
+  article.dataset.zipUrl = template.download_url || '';
+  article.dataset.hash = template.hash || '';
+  article.style.cssText = 'cursor: pointer; border: 2px solid transparent;';
+
+  const name = escapeHtml(template.name || template.id);
+  const description = escapeHtml(template.description || 'A starter template for your project.');
+
+  article.innerHTML = `
+    <h3>${name}</h3>
+    <p>${description}</p>
+    <button type="button" class="select-template-btn" data-template-id="${escapeHtml(template.id)}">Select Template</button>
+  `;
+
+  // Insert before the last child (the Empty Project option should stay first)
+  const emptyCard = gridEl.querySelector('[data-template-id=""]');
+  if (emptyCard && emptyCard.nextElementSibling) {
+    gridEl.insertBefore(article, emptyCard.nextElementSibling);
+  } else {
+    gridEl.appendChild(article);
+  }
+}
+
+async function installTemplate(templateId, zipUrl, hash) {
+  const installingEl = document.getElementById('template-installing');
+  const gridEl = document.getElementById('templates-grid');
+
+  // Show installing state
+  if (installingEl) installingEl.style.display = 'block';
+  if (gridEl) gridEl.style.opacity = '0.5';
+
+  try {
+    const result = await apiPost('install_template', {
+      template_id: templateId,
+      zip_url: zipUrl,
+      hash: hash,
+    });
+
+    if (result.ok) {
+      showToast(templateId ? 'Template installed successfully!' : 'Starting with empty project', 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      const errorMsg = result.error || 'Unknown error';
+      console.error('[Lutin] Template installation failed:', errorMsg);
+      console.error('[Lutin] Template ID:', templateId, 'ZIP URL:', zipUrl);
+      showToast('Installation failed: ' + errorMsg, 'error');
+      if (installingEl) installingEl.style.display = 'none';
+      if (gridEl) gridEl.style.opacity = '1';
+    }
+  } catch (error) {
+    console.error('[Lutin] Template installation error:', error);
+    showToast('Installation error: ' + error.message, 'error');
+    if (installingEl) installingEl.style.display = 'none';
+    if (gridEl) gridEl.style.opacity = '1';
+  }
+}
+
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initSetup();
@@ -2184,6 +2812,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initFileTree();
   initConfig();
   initUrlLookup();
+  initTemplates();
 });
 
 // Make showTab globally accessible for inline onclick handlers
@@ -2418,6 +3047,68 @@ const LUTIN_VIEW_TAB_CONFIG = <<<'LUTINVIEW'
     <div id="backup-list"></div>
   </div>
 </section>
+
+LUTINVIEW;
+
+const LUTIN_VIEW_TAB_TEMPLATES = <<<'LUTINVIEW'
+<section id="tab-templates">
+  <article style="max-width: 800px; margin: 2rem auto;">
+    <h2>Choose a Starter Template</h2>
+    <p>Select a template to get started quickly, or choose "Empty Project" to start from scratch.</p>
+    
+    <div id="templates-loading" class="loading-indicator">
+      <p>Loading available templates...</p>
+    </div>
+    
+    <div id="templates-error" style="display: none;" class="message message--error">
+      <p>Failed to load templates. You can still start with an empty project.</p>
+    </div>
+    
+    <div id="templates-grid" class="grid" style="display: none;">
+      <!-- Empty project option -->
+      <article class="template-card" data-template-id="" style="cursor: pointer; border: 2px solid transparent;">
+        <h3>🚀 Empty Project</h3>
+        <p>Start from scratch with a clean slate.</p>
+        <button type="button" class="select-template-btn" data-template-id="">Start Empty</button>
+      </article>
+      
+      <!-- Template cards will be inserted here -->
+    </div>
+    
+    <div id="template-installing" style="display: none; margin-top: 2rem;">
+      <p>Installing template... <span class="loading-dots">Please wait</span></p>
+      <progress id="install-progress" style="width: 100%;"></progress>
+    </div>
+  </article>
+</section>
+
+<style>
+.template-card {
+  padding: 1.5rem;
+  border-radius: 8px;
+  background: var(--card-background-color);
+  transition: border-color 0.2s, transform 0.2s;
+}
+.template-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-2px);
+}
+.template-card.selected {
+  border-color: var(--primary);
+}
+.template-card h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+.template-card p {
+  margin-bottom: 1rem;
+  color: var(--muted-color);
+  font-size: 0.9rem;
+}
+.select-template-btn {
+  width: 100%;
+}
+</style>
 
 LUTINVIEW;
 

@@ -9,8 +9,10 @@ interface LutinProviderAdapter {
      *   - A text delta:   "data: " . json_encode(['type'=>'text','delta'=>'...']) . "\n\n"
      *   - A tool call:    "data: " . json_encode(['type'=>'tool_call','name'=>'...','input'=>[...],'id'=>'...']) . "\n\n"
      *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
+     * 
+     * @param string $systemPrompt The system prompt to use (combines base prompt + AGENTS.md if present)
      */
-    public function stream(array $messages, array $tools): \Generator;
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
 }
 
 class AnthropicAdapter implements LutinProviderAdapter {
@@ -22,16 +24,19 @@ class AnthropicAdapter implements LutinProviderAdapter {
         $this->model = $model;
     }
 
-    public function stream(array $messages, array $tools): \Generator {
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator {
         $url = 'https://api.anthropic.com/v1/messages';
+
+        // Use provided system prompt or fall back to default
+        $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
 
         $payload = [
             'model' => $this->model,
             'max_tokens' => 8192,
-            'system' => 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-                'You can read files, list directories, and write files on the server. ' .
-                'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
-                'When asked to create or modify a page, read the existing files first to understand the structure.',
+            'system' => $system,
             'messages' => $messages,
             'tools' => $tools,
         ];
@@ -113,12 +118,24 @@ class OpenAIAdapter implements LutinProviderAdapter {
         $this->model = $model;
     }
 
-    public function stream(array $messages, array $tools): \Generator {
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator {
         $url = 'https://api.openai.com/v1/chat/completions';
+
+        // Use provided system prompt or fall back to default
+        $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
+
+        // Prepend system message to messages array
+        $fullMessages = array_merge(
+            [['role' => 'system', 'content' => $system]],
+            $messages
+        );
 
         $payload = [
             'model' => $this->model,
-            'messages' => $messages,
+            'messages' => $fullMessages,
             'tools' => $tools,
             'tool_choice' => 'auto',
         ];
@@ -213,11 +230,42 @@ class LutinAgent {
     // Tool definitions sent to the API
     private array $toolDefinitions;
 
+    // Cached system prompt (base + AGENTS.md if present)
+    private ?string $systemPrompt = null;
+
     public function __construct(LutinConfig $config, LutinFileManager $fm) {
         $this->config = $config;
         $this->fm = $fm;
         $this->adapter = $this->buildAdapter();
         $this->toolDefinitions = $this->buildToolDefinitions();
+    }
+
+    /**
+     * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
+     * The AGENTS.md file is read from the data directory (outside web root).
+     */
+    private function buildSystemPrompt(): string {
+        if ($this->systemPrompt !== null) {
+            return $this->systemPrompt;
+        }
+
+        $basePrompt = 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files on the server. ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or .lutin/ system files. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
+
+        $dataDir = $this->config->getDataDir();
+        $agentsMdPath = $dataDir . '/AGENTS.md';
+
+        if (file_exists($agentsMdPath) && is_readable($agentsMdPath)) {
+            $agentsContent = file_get_contents($agentsMdPath);
+            if ($agentsContent !== false) {
+                $basePrompt .= "\n\n---\n\nThe following is additional context about this specific project from AGENTS.md:\n\n" . $agentsContent;
+            }
+        }
+
+        $this->systemPrompt = $basePrompt;
+        return $basePrompt;
     }
 
     /**
@@ -336,7 +384,8 @@ class LutinAgent {
         }
 
         try {
-            $generator = $this->adapter->stream($this->messages, $this->toolDefinitions);
+            $systemPrompt = $this->buildSystemPrompt();
+            $generator = $this->adapter->stream($this->messages, $this->toolDefinitions, $systemPrompt);
 
             $assistantContent = [];
             $textBuffer = '';

@@ -1,5 +1,5 @@
 <?php
-// scripts/test.php — Lutin unit tests (no Composer)
+// tests/test.php — Lutin unit tests (no Composer)
 declare(strict_types=1);
 
 // Change to repo root for relative paths
@@ -133,6 +133,64 @@ $tests['LutinFileManager::urlToFile (basic heuristics)'] = function() use ($scra
     assert_true(count($candidates) >= 1, 'urlToFile must find at least one candidate');
     assert_true(in_array('about.php', $candidates) || in_array('pages/about.php', $candidates),
         'urlToFile must include about.php or pages/about.php');
+};
+
+// Test: LutinAgent — AGENTS.md from data directory is included in system prompt
+$tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scratch) {
+    require_once __DIR__ . '/../src/classes/LutinAgent.php';
+    
+    $webRoot = $scratch . '/site7/web';
+    $dataDir = $scratch . '/site7/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    
+    // Create AGENTS.md in data directory
+    file_put_contents($dataDir . '/AGENTS.md', "# Project Guidelines\n\nUse Tailwind CSS.");
+    
+    // Create a mock config with required values
+    $cfg = new LutinConfig($webRoot, $dataDir);
+    $cfg->setProvider('anthropic');
+    $cfg->setApiKey('sk-test');
+    
+    $fm = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $agent = new LutinAgent($cfg, $fm);
+    
+    // Use reflection to test the private method
+    $reflection = new ReflectionClass($agent);
+    $method = $reflection->getMethod('buildSystemPrompt');
+    $method->setAccessible(true);
+    $systemPrompt = $method->invoke($agent);
+    
+    assert_true(str_contains($systemPrompt, 'You are Lutin'), 'Base prompt should be present');
+    assert_true(str_contains($systemPrompt, 'AGENTS.md'), 'AGENTS.md reference should be present');
+    assert_true(str_contains($systemPrompt, 'Tailwind CSS'), 'AGENTS.md content should be included');
+};
+
+// Test: LutinAgent — buildSystemPrompt works without AGENTS.md
+$tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($scratch) {
+    require_once __DIR__ . '/../src/classes/LutinAgent.php';
+    
+    $webRoot = $scratch . '/site8/web';
+    $dataDir = $scratch . '/site8/lutin';
+    mkdir($webRoot, 0700, true);
+    mkdir($dataDir, 0700, true);
+    
+    // No AGENTS.md file
+    
+    $cfg = new LutinConfig($webRoot, $dataDir);
+    $cfg->setProvider('anthropic');
+    $cfg->setApiKey('sk-test');
+    
+    $fm = new LutinFileManager($webRoot, $dataDir, $cfg);
+    $agent = new LutinAgent($cfg, $fm);
+    
+    $reflection = new ReflectionClass($agent);
+    $method = $reflection->getMethod('buildSystemPrompt');
+    $method->setAccessible(true);
+    $systemPrompt = $method->invoke($agent);
+    
+    assert_true(str_contains($systemPrompt, 'You are Lutin'), 'Base prompt should be present');
+    assert_true(!str_contains($systemPrompt, 'AGENTS.md:'), 'AGENTS.md section should not be present');
 };
 
 // ── Runner ─────────────────────────────────────────────────────────────────

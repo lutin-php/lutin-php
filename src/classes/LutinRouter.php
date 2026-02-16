@@ -79,6 +79,13 @@ class LutinRouter {
                 $this->requireAuth();
                 $this->requireCsrf();
                 $this->handleConfigSave();
+            } elseif ($method === 'GET' && $action === 'templates') {
+                $this->requireAuth();
+                $this->handleTemplatesList();
+            } elseif ($method === 'POST' && $action === 'install_template') {
+                $this->requireAuth();
+                $this->requireCsrf();
+                $this->handleInstallTemplate();
             } else {
                 $this->jsonError('Unknown action', 404);
             }
@@ -94,6 +101,8 @@ class LutinRouter {
             $this->view->renderSetupWizard();
         } elseif (!$this->auth->isAuthenticated()) {
             $this->view->renderLogin();
+        } elseif ($this->config->needsTemplateSelection()) {
+            $this->view->renderTemplateSelection();
         } else {
             $this->view->renderApp();
         }
@@ -261,6 +270,132 @@ class LutinRouter {
             $this->jsonOk([]);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleTemplatesList(): void {
+        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-starters/main/starters.json';
+        $cacheDir = $this->config->getTempDir();
+        $cacheFile = $cacheDir . '/starters.json';
+        $maxAge = 86400; // 1 day in seconds
+
+        // Ensure cache directory exists
+        if (!is_dir($cacheDir)) {
+            mkdir($cacheDir, 0700, true);
+        }
+
+        // Check if we need to fetch fresh data
+        $needsFetch = true;
+        $cachedData = null;
+        
+        if (file_exists($cacheFile)) {
+            $age = time() - filemtime($cacheFile);
+            $cachedData = file_get_contents($cacheFile);
+            if ($age < $maxAge && $cachedData !== false) {
+                $needsFetch = false;
+            }
+        }
+
+        $response = null;
+        $fetchError = null;
+        $httpCode = 0;
+        
+        if ($needsFetch) {
+            $ch = curl_init($manifestUrl);
+            if ($ch === false) {
+                $fetchError = 'Failed to initialize curl';
+            } else {
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlError = curl_error($ch);
+                curl_close($ch);
+
+                if ($httpCode === 200 && $response !== false) {
+                    // Cache the successful response
+                    file_put_contents($cacheFile, $response);
+                } else {
+                    $fetchError = 'HTTP ' . $httpCode;
+                    if ($curlError) {
+                        $fetchError .= ' (' . $curlError . ')';
+                    }
+                    // Fall back to cached data if available (even if old)
+                    if ($cachedData === null && file_exists($cacheFile)) {
+                        $cachedData = file_get_contents($cacheFile);
+                    }
+                }
+            }
+        }
+
+        // Use cached data if fetch failed or wasn't needed
+        if ($response === null || $response === false) {
+            $response = $cachedData;
+        }
+
+        if ($response === null || $response === false || empty($response)) {
+            $this->jsonOk([
+                'templates' => [], 
+                'error' => 'Failed to fetch templates' . ($fetchError ? ': ' . $fetchError : ''),
+                'http_code' => $httpCode,
+                'cache_file' => $cacheFile,
+                'cache_exists' => file_exists($cacheFile)
+            ]);
+            return;
+        }
+
+        try {
+            $manifest = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
+            $templates = $manifest['starters'] ?? [];
+            $this->jsonOk([
+                'templates' => $templates,
+                'cached' => !$needsFetch,
+                'fetch_error' => $fetchError,
+                'http_code' => $httpCode,
+                'cache_file' => $cacheFile
+            ]);
+        } catch (\JsonException $e) {
+            // Save bad response for debugging
+            file_put_contents($cacheFile . '.error', $response);
+            $this->jsonOk([
+                'templates' => [], 
+                'error' => 'Invalid template data: ' . $e->getMessage(),
+                'response_preview' => substr($response, 0, 200)
+            ]);
+        }
+    }
+
+    private function handleInstallTemplate(): void {
+        $body = $this->getBody();
+        $templateId = $body['template_id'] ?? null;
+
+        // Empty project (no template)
+        if ($templateId === null || $templateId === '') {
+            $this->config->setTemplateSelected(null);
+            $this->config->save();
+            $this->jsonOk(['installed' => true, 'template_id' => null]);
+            return;
+        }
+
+        // Install a specific template
+        $zipUrl = $body['zip_url'] ?? null;
+        $hash = $body['hash'] ?? null;
+
+        if (empty($zipUrl)) {
+            $this->jsonError('Template download URL required', 400);
+            return;
+        }
+
+        try {
+            $this->fm->installTemplate($zipUrl, $hash);
+            $this->config->setTemplateSelected($templateId);
+            $this->config->save();
+            $this->jsonOk(['installed' => true, 'template_id' => $templateId]);
+        } catch (\Throwable $e) {
+            $this->jsonError('Template installation failed: ' . $e->getMessage(), 500);
         }
     }
 
