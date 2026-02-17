@@ -12,9 +12,10 @@ const state = {
 
 // ── TAB DETECTION ─────────────────────────────────────────────────────────────
 function getCurrentTab() {
-  // First try URL hash
+  // First try URL hash (strip query params)
   if (location.hash) {
-    return location.hash.slice(1);
+    const hash = location.hash.slice(1);
+    return hash.split('?')[0];
   }
   // Fall back to visible tab
   const visibleSection = document.querySelector('section[style*="display: block"]') ||
@@ -23,6 +24,38 @@ function getCurrentTab() {
     return visibleSection.id.replace('tab-', '');
   }
   return 'chat'; // Default
+}
+
+/**
+ * Parse query parameters from the URL hash (e.g., #editor?file=path&other=value)
+ * Returns URLSearchParams object or null if no params
+ */
+function getHashParams() {
+  if (!location.hash) return null;
+  const hash = location.hash.slice(1);
+  const queryIndex = hash.indexOf('?');
+  if (queryIndex === -1) return null;
+  return new URLSearchParams(hash.slice(queryIndex + 1));
+}
+
+/**
+ * Update the URL hash with query parameters while keeping the tab
+ */
+function setHashParams(params) {
+  const tab = getCurrentTab();
+  const urlParams = new URLSearchParams();
+  
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined) {
+      urlParams.set(key, value);
+    }
+  }
+  
+  const queryString = urlParams.toString();
+  const newHash = queryString ? `${tab}?${queryString}` : tab;
+  
+  // Use replaceState to avoid creating history entries for internal state changes
+  history.replaceState(null, '', `#${newHash}`);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
@@ -84,12 +117,27 @@ function showToast(message, type = 'info') {
 
 // ── TABS ──────────────────────────────────────────────────────────────────────
 function initTabs() {
+  // Check if we're on the login/setup/template page (single page view)
+  // The main app has #tab-chat, #tab-editor, #tab-config sections
+  // Single-page views only have one section (login/setup/templates)
+  const hasMainAppTabs = document.getElementById('tab-chat') !== null;
+  if (!hasMainAppTabs) {
+    // On single-page views, always show the single section that exists
+    // and ignore any URL hash
+    const section = document.querySelector('section');
+    if (section) section.style.display = 'block';
+    return;
+  }
+
   function showTab(tabName) {
+    // Strip query parameters from tabName (e.g., "editor?file=path" -> "editor")
+    const cleanTabName = tabName.split('?')[0];
+    
     // Hide all sections
     document.querySelectorAll('section').forEach(s => s.style.display = 'none');
 
     // Show selected section
-    const section = document.getElementById(`tab-${tabName}`);
+    const section = document.getElementById(`tab-${cleanTabName}`);
     if (section) section.style.display = 'block';
 
     // Update nav styling if nav exists
@@ -107,7 +155,7 @@ function initTabs() {
   // Handle hash changes - only show a different tab if hash is explicitly set
   window.addEventListener('hashchange', () => {
     if (location.hash) {
-      const hash = location.hash.slice(1);
+      const hash = location.hash.slice(1).split('?')[0];
       showTab(hash);
     }
   });
@@ -115,7 +163,7 @@ function initTabs() {
   // Initial show - only if hash is explicitly set in URL
   // Otherwise, trust the CSS to show the correct initial tab (from PHP)
   if (location.hash) {
-    const initialTab = location.hash.slice(1);
+    const initialTab = location.hash.slice(1).split('?')[0];
     showTab(initialTab);
   }
   // If no hash, update nav styling to match the visible tab (from CSS)
@@ -410,6 +458,16 @@ function initEditor() {
   if (saveBtn) {
     saveBtn.addEventListener('click', saveFile);
   }
+  
+  // Check if there's a file parameter in URL and auto-open it
+  const hashParams = getHashParams();
+  if (hashParams) {
+    const filePath = hashParams.get('file');
+    if (filePath) {
+      // Small delay to ensure editor is fully initialized
+      setTimeout(() => openFile(filePath), 100);
+    }
+  }
 }
 
 function initJodit() {
@@ -522,6 +580,9 @@ async function openFile(path) {
     }
 
     state.currentFile = path;
+    
+    // Update URL with file path for persistence on refresh
+    setHashParams({ file: path });
     
     // Set content in appropriate editor
     setEditorContent(result.data.content, path);
