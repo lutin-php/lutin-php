@@ -23,11 +23,25 @@ class LutinRouter {
     }
 
     /**
-     * Lazily initialize the agent when needed.
+     * Lazily initialize the chat agent when needed.
      */
     private function getAgent(): AbstractLutinAgent {
         if ($this->agent === null) {
             $this->agent = new LutinChatAgent($this->config, $this->fm);
+        }
+        return $this->agent;
+    }
+
+    /**
+     * Lazily initialize the editor agent when needed.
+     */
+    private function getEditorAgent(): LutinEditorAgent {
+        if ($this->agent === null) {
+            $this->agent = new LutinEditorAgent($this->config, $this->fm);
+        }
+        // Ensure we always return a LutinEditorAgent
+        if (!($this->agent instanceof LutinEditorAgent)) {
+            $this->agent = new LutinEditorAgent($this->config, $this->fm);
         }
         return $this->agent;
     }
@@ -55,6 +69,10 @@ class LutinRouter {
                 $this->requireAuth();
                 $this->requireCsrf();
                 $this->handleChat();
+            } elseif ($method === 'POST' && $action === 'editor_chat') {
+                $this->requireAuth();
+                $this->requireCsrf();
+                $this->handleEditorChat();
             } elseif ($method === 'GET' && $action === 'list') {
                 $this->requireAuth();
                 $this->handleList();
@@ -189,6 +207,23 @@ class LutinRouter {
         }
 
         $this->getAgent()->chat($message, $history);
+    }
+
+    private function handleEditorChat(): void {
+        $body = $this->getBody();
+        $message = $body['message'] ?? '';
+        $history = $body['history'] ?? [];
+        $currentFile = $body['current_file'] ?? null;
+        $currentContent = $body['current_content'] ?? null;
+
+        if (empty($message)) {
+            $this->jsonError('Message required', 400);
+            return;
+        }
+
+        $agent = $this->getEditorAgent();
+        $agent->setCurrentFile($currentFile, $currentContent);
+        $agent->chat($message, $history);
     }
 
     private function handleList(): void {

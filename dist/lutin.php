@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-02-17 11:56:26
+// Built: 2026-02-17 12:29:55
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -1492,6 +1492,17 @@ abstract class AbstractLutinAgent {
                 'required' => ['path', 'content'],
             ],
         ],
+        'open_file_in_editor' => [
+            'name' => 'open_file_in_editor',
+            'description' => 'Opens a file in the editor. Use this when you want to show the user a specific file in the editor interface. The file will be loaded and displayed to the user.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                ],
+                'required' => ['path'],
+            ],
+        ],
     ];
 
     protected LutinConfig $config;
@@ -1831,6 +1842,137 @@ class LutinChatAgent extends AbstractLutinAgent {
     }
 }
 
+// ── LutinEditorAgent.php ─────
+/**
+ * Editor Agent for Lutin.
+ * Specialized agent for the editor page that helps users with code editing tasks.
+ * Provides file management capabilities plus the ability to open files in the editor.
+ */
+class LutinEditorAgent extends AbstractLutinAgent {
+
+    /** Cached system prompt */
+    private ?string $systemPrompt = null;
+
+    /** Currently open file in the editor (if any) */
+    private ?string $currentFile = null;
+
+    /** Content of the currently open file */
+    private ?string $currentContent = null;
+
+    /**
+     * Sets the current file context for this agent instance.
+     * This should be called before chat() to provide file context.
+     *
+     * @param string|null $path Relative path to the current file
+     * @param string|null $content Content of the current file
+     */
+    public function setCurrentFile(?string $path, ?string $content): void {
+        $this->currentFile = $path;
+        $this->currentContent = $content;
+    }
+
+    /**
+     * Base system prompt for the editor agent.
+     */
+    protected function getBaseSystemPrompt(): string {
+        return 'You are Lutin Editor, an AI coding assistant integrated into a web-based code editor. ' .
+            'Your purpose is to help users write, edit, and understand code.\n\n' .
+            'CAPABILITIES:\n' .
+            '- You can read files to understand the project structure\n' .
+            '- You can write or modify files to make changes\n' .
+            '- You can open files in the editor to show them to the user\n' .
+            '- You can list directories to explore the codebase\n\n' .
+            'EDITOR CONTEXT:\n' .
+            '- The user is working in a file editor with syntax highlighting\n' .
+            '- The web root (public files) is typically in a subdirectory like "public/" or "www/"\n' .
+            '- The project root contains all source code, configuration, and website files\n' .
+            '- Paths are always relative to the project root\n\n' .
+            'GUIDELINES:\n' .
+            '- Always prefer making minimal, targeted changes\n' .
+            '- When suggesting code changes, explain what you\'re doing and why\n' .
+            '- If you need to reference another file, use open_file_in_editor to show it\n' .
+            '- Never modify lutin.php or access the lutin/ directory\n' .
+            '- When writing files, ensure the code is complete and valid\n' .
+            '- If the user asks about the current file, the content is already provided in context\n\n' .
+            'WORKFLOW:\n' .
+            '1. If the user asks about specific code, check if you need to read other files for context\n' .
+            '2. When making changes, write the complete file content\n' .
+            '3. After making changes, offer to open related files if relevant\n' .
+            '4. Always confirm successful file operations';
+    }
+
+    /**
+     * Builds the system prompt by combining the base prompt with:
+     * - Current file context (if a file is open)
+     * - AGENTS.md content if present
+     */
+    protected function buildSystemPrompt(): string {
+        if ($this->systemPrompt !== null) {
+            return $this->systemPrompt;
+        }
+
+        $basePrompt = $this->getBaseSystemPrompt();
+
+        // Add current file context if available
+        if ($this->currentFile !== null && $this->currentContent !== null) {
+            $basePrompt .= "\n\n---\n\nCURRENT FILE CONTEXT:\n" .
+                "File: {$this->currentFile}\n" .
+                "Content:\n```\n" . $this->currentContent . "\n```\n" .
+                "The user is currently editing this file. You can reference it when answering questions.";
+        }
+
+        // Add AGENTS.md content if present
+        $lutinDir = $this->config->getLutinDir();
+        $agentsMdPath = $lutinDir . '/AGENTS.md';
+        $basePrompt = $this->addFileContentToPrompt($basePrompt, $agentsMdPath, 'AGENTS.md');
+
+        $this->systemPrompt = $basePrompt;
+        return $basePrompt;
+    }
+
+    /**
+     * Returns the tool schema array for editor operations.
+     * Includes all file management tools plus open_file_in_editor.
+     *
+     * @return array Provider-agnostic tool definitions
+     */
+    protected function buildToolDefinitions(): array {
+        return $this->selectTools(['list_files', 'read_file', 'write_file', 'open_file_in_editor']);
+    }
+
+    /**
+     * Executes a tool call from the AI.
+     * Extends parent to handle open_file_in_editor tool.
+     *
+     * @param string $name The tool name
+     * @param array $input The tool input parameters
+     * @return string The result as a string (typically JSON-encoded)
+     */
+    protected function executeTool(string $name, array $input): string {
+        if ($name === 'open_file_in_editor') {
+            $path = $input['path'] ?? '';
+            if (empty($path)) {
+                return json_encode(['ok' => false, 'error' => 'Path required']);
+            }
+
+            // Validate the file exists
+            try {
+                // This will throw if file doesn't exist or isn't readable
+                $content = $this->fm->readFile($path);
+                return json_encode([
+                    'ok' => true,
+                    'path' => $path,
+                    'size' => strlen($content),
+                ]);
+            } catch (\Throwable $e) {
+                return json_encode(['ok' => false, 'error' => $e->getMessage()]);
+            }
+        }
+
+        return parent::executeTool($name, $input);
+    }
+}
+
 // ── LutinRouter.php ─────
 class LutinRouter {
     private LutinConfig $config;
@@ -1854,11 +1996,25 @@ class LutinRouter {
     }
 
     /**
-     * Lazily initialize the agent when needed.
+     * Lazily initialize the chat agent when needed.
      */
     private function getAgent(): AbstractLutinAgent {
         if ($this->agent === null) {
             $this->agent = new LutinChatAgent($this->config, $this->fm);
+        }
+        return $this->agent;
+    }
+
+    /**
+     * Lazily initialize the editor agent when needed.
+     */
+    private function getEditorAgent(): LutinEditorAgent {
+        if ($this->agent === null) {
+            $this->agent = new LutinEditorAgent($this->config, $this->fm);
+        }
+        // Ensure we always return a LutinEditorAgent
+        if (!($this->agent instanceof LutinEditorAgent)) {
+            $this->agent = new LutinEditorAgent($this->config, $this->fm);
         }
         return $this->agent;
     }
@@ -1886,6 +2042,10 @@ class LutinRouter {
                 $this->requireAuth();
                 $this->requireCsrf();
                 $this->handleChat();
+            } elseif ($method === 'POST' && $action === 'editor_chat') {
+                $this->requireAuth();
+                $this->requireCsrf();
+                $this->handleEditorChat();
             } elseif ($method === 'GET' && $action === 'list') {
                 $this->requireAuth();
                 $this->handleList();
@@ -2020,6 +2180,23 @@ class LutinRouter {
         }
 
         $this->getAgent()->chat($message, $history);
+    }
+
+    private function handleEditorChat(): void {
+        $body = $this->getBody();
+        $message = $body['message'] ?? '';
+        $history = $body['history'] ?? [];
+        $currentFile = $body['current_file'] ?? null;
+        $currentContent = $body['current_content'] ?? null;
+
+        if (empty($message)) {
+            $this->jsonError('Message required', 400);
+            return;
+        }
+
+        $agent = $this->getEditorAgent();
+        $agent->setCurrentFile($currentFile, $currentContent);
+        $agent->chat($message, $history);
     }
 
     private function handleList(): void {
@@ -2406,6 +2583,7 @@ const state = {
   cmEditor: null,           // CodeMirror instance
   tinymceEditor: null,      // TinyMCE instance
   chatHistory: [],          // [{role, content}] accumulated for context
+  editorChatHistory: [],    // Separate history for editor AI helper
   isStreaming: false,       // true while SSE is open
 };
 
@@ -3100,21 +3278,19 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
   responseContainer.textContent = '';
   
   try {
-    // Build context message with file info
-    let contextMessage = prompt;
-    if (currentFile) {
-      contextMessage = `I'm working on file "${currentFile}". Here's the current content:\n\n\`\`\`\n${currentContent}\n\`\`\`\n\nMy question: ${prompt}`;
-    }
-    
-    const response = await fetch('?action=chat', {
+    // Use the dedicated editor_chat endpoint
+    // The server will handle current file context automatically
+    const response = await fetch('?action=editor_chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Lutin-Token': state.csrfToken,
       },
       body: JSON.stringify({
-        message: contextMessage,
-        history: state.chatHistory,
+        message: prompt,
+        history: state.editorChatHistory || [],
+        current_file: currentFile,
+        current_content: currentContent,
       }),
     });
 
@@ -3134,6 +3310,7 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullResponse = '';
+    let openFilePath = null;
     responseContainer.classList.remove('loading');
 
     while (true) {
@@ -3161,6 +3338,12 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
             responseContainer.textContent = '❌ Error: ' + event.message;
           } else if (event.type === 'tool_start') {
             responseContainer.textContent = fullResponse + '\n[Using tool: ' + event.name + '...]';
+          } else if (event.type === 'tool_result') {
+            // Check if this is an open_file_in_editor tool result
+            const result = JSON.parse(event.result || '{}');
+            if (result.ok && result.path) {
+              openFilePath = result.path;
+            }
           }
         } catch (e) {
           console.error('Failed to parse SSE event:', e, line);
@@ -3168,10 +3351,24 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
       }
     }
 
-    // Add to chat history
+    // Open file in editor if requested by the AI
+    if (openFilePath) {
+      await openFile(openFilePath);
+      showToast('Opened: ' + openFilePath, 'info');
+    }
+
+    // Add to editor chat history (separate from main chat)
+    if (!state.editorChatHistory) {
+      state.editorChatHistory = [];
+    }
     if (fullResponse) {
-      state.chatHistory.push({ role: 'user', content: prompt });
-      state.chatHistory.push({ role: 'assistant', content: fullResponse });
+      state.editorChatHistory.push({ role: 'user', content: prompt });
+      state.editorChatHistory.push({ role: 'assistant', content: fullResponse });
+      
+      // Keep history manageable (last 20 messages)
+      if (state.editorChatHistory.length > 20) {
+        state.editorChatHistory = state.editorChatHistory.slice(-20);
+      }
     }
     
   } catch (error) {
@@ -4421,6 +4618,7 @@ if (!class_exists('LutinConfig')) {
     // Agent classes
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
+    require_once __DIR__ . '/agents/LutinEditorAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }

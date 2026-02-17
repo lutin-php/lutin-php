@@ -47,6 +47,17 @@ abstract class AbstractLutinAgent {
                 'required' => ['path', 'content'],
             ],
         ],
+        'open_file_in_editor' => [
+            'name' => 'open_file_in_editor',
+            'description' => 'Opens a file in the editor. Use this when you want to show the user a specific file in the editor interface. The file will be loaded and displayed to the user.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                ],
+                'required' => ['path'],
+            ],
+        ],
     ];
 
     protected LutinConfig $config;

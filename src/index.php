@@ -21,6 +21,7 @@ if (!class_exists('LutinConfig')) {
     // Agent classes
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
+    require_once __DIR__ . '/agents/LutinEditorAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }

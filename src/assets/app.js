@@ -6,6 +6,7 @@ const state = {
   cmEditor: null,           // CodeMirror instance
   tinymceEditor: null,      // TinyMCE instance
   chatHistory: [],          // [{role, content}] accumulated for context
+  editorChatHistory: [],    // Separate history for editor AI helper
   isStreaming: false,       // true while SSE is open
 };
 
@@ -700,21 +701,19 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
   responseContainer.textContent = '';
   
   try {
-    // Build context message with file info
-    let contextMessage = prompt;
-    if (currentFile) {
-      contextMessage = `I'm working on file "${currentFile}". Here's the current content:\n\n\`\`\`\n${currentContent}\n\`\`\`\n\nMy question: ${prompt}`;
-    }
-    
-    const response = await fetch('?action=chat', {
+    // Use the dedicated editor_chat endpoint
+    // The server will handle current file context automatically
+    const response = await fetch('?action=editor_chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Lutin-Token': state.csrfToken,
       },
       body: JSON.stringify({
-        message: contextMessage,
-        history: state.chatHistory,
+        message: prompt,
+        history: state.editorChatHistory || [],
+        current_file: currentFile,
+        current_content: currentContent,
       }),
     });
 
@@ -734,6 +733,7 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullResponse = '';
+    let openFilePath = null;
     responseContainer.classList.remove('loading');
 
     while (true) {
@@ -761,6 +761,12 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
             responseContainer.textContent = '❌ Error: ' + event.message;
           } else if (event.type === 'tool_start') {
             responseContainer.textContent = fullResponse + '\n[Using tool: ' + event.name + '...]';
+          } else if (event.type === 'tool_result') {
+            // Check if this is an open_file_in_editor tool result
+            const result = JSON.parse(event.result || '{}');
+            if (result.ok && result.path) {
+              openFilePath = result.path;
+            }
           }
         } catch (e) {
           console.error('Failed to parse SSE event:', e, line);
@@ -768,10 +774,24 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
       }
     }
 
-    // Add to chat history
+    // Open file in editor if requested by the AI
+    if (openFilePath) {
+      await openFile(openFilePath);
+      showToast('Opened: ' + openFilePath, 'info');
+    }
+
+    // Add to editor chat history (separate from main chat)
+    if (!state.editorChatHistory) {
+      state.editorChatHistory = [];
+    }
     if (fullResponse) {
-      state.chatHistory.push({ role: 'user', content: prompt });
-      state.chatHistory.push({ role: 'assistant', content: fullResponse });
+      state.editorChatHistory.push({ role: 'user', content: prompt });
+      state.editorChatHistory.push({ role: 'assistant', content: fullResponse });
+      
+      // Keep history manageable (last 20 messages)
+      if (state.editorChatHistory.length > 20) {
+        state.editorChatHistory = state.editorChatHistory.slice(-20);
+      }
     }
     
   } catch (error) {

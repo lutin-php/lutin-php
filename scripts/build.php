@@ -17,6 +17,7 @@ $classFiles = [
     // Agent classes
     'src/agents/AbstractLutinAgent.php',
     'src/agents/LutinChatAgent.php',
+    'src/agents/LutinEditorAgent.php',
     'src/classes/LutinRouter.php',
     'src/classes/LutinView.php',
 ];
