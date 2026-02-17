@@ -162,7 +162,7 @@ $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scra
     require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
-    require_once __DIR__ . '/../src/agents/LutinAgent.php';
+    require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
     $projectRoot = $scratch . '/site7';
@@ -198,7 +198,7 @@ $tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($s
     require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
-    require_once __DIR__ . '/../src/agents/LutinAgent.php';
+    require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
     $projectRoot = $scratch . '/site8';

@@ -35,8 +35,8 @@ lutin/
 │   │   ├── LutinRouter.php
 │   │   └── LutinView.php
 │   ├── agents/                 # AI Agent classes
-│   │   ├── LutinAgent.php      # Base Agent class (abstract)
-│   │   └── LutinChatAgent.php  # Chat Agent with file tools
+│   │   ├── AbstractLutinAgent.php  # Base Agent class (abstract)
+│   │   └── LutinChatAgent.php      # Chat Agent with file tools
 │   ├── agent_providers/        # AI Provider adapters
 │   │   ├── LutinProviderAdapter.php  # Interface
 │   │   ├── AnthropicAdapter.php      # Anthropic (Claude) adapter
@@ -172,9 +172,13 @@ and writes a single self-contained `dist/lutin.php`.
 ## AI Provider Abstraction
 
 Provider adapters are in `src/agent_providers/` and implement the `LutinProviderAdapter` interface.
-`LutinAgent` (base class) communicates with a single provider configured globally in the lutin directory's `config.json`.
+`AbstractLutinAgent` (base class) communicates with a single provider configured globally in the lutin directory's `config.json`.
 Supported providers in v1: **Anthropic** (Claude) and **OpenAI** (GPT).
 The provider adapter is selected at runtime based on `config.provider` — no code changes needed to switch.
+
+Each adapter implements `formatTools()` to convert provider-agnostic tool definitions to the provider-specific format:
+- **Anthropic**: Uses tools directly (no transformation)
+- **OpenAI**: Wraps each tool in `{type: 'function', function: {...}}` structure
 
 Tool calling follows each provider's native format:
 - Anthropic: `tool_use` / `tool_result` content blocks.
@@ -187,19 +191,28 @@ Available AI tools (PHP-side functions the agent can invoke):
 
 ## Agent Architecture
 
-The base `LutinAgent` class (abstract, in `src/agents/LutinAgent.php`) provides:
+The base `AbstractLutinAgent` class (in `src/agents/AbstractLutinAgent.php`) provides:
 - Provider adapter management and API communication
 - The agentic loop (`runLoop()`) for multi-turn tool interactions
 - SSE output handling (`sseFlush()`)
-- System prompt building (with optional AGENTS.md injection)
+- Helper method `addFileContentToPrompt()` for including file content in prompts
+- `COMMON_AVAILABLE_TOOLS` constant — the full list of all available tools (list_files, read_file, write_file)
+- `buildToolDefinitions()` — returns all tools by default
+- `selectTools(array $toolNames)` — helper to select specific tools from COMMON_AVAILABLE_TOOLS
+- `executeTool()` — executes file management tools via LutinFileManager
+- `executeCustomTool()` — hook for subclasses to handle custom tools
 
-Subclasses must implement:
-- `buildToolDefinitions()` — Returns the tool schema for the AI provider
-- `executeTool()` — Dispatches tool calls to appropriate handlers
+Subclasses must:
+- Implement `buildSystemPrompt()` — Builds and returns the complete system prompt
+- Override `buildToolDefinitions()` and return `$this->selectTools(['tool1', 'tool2'])` to select wanted tools
+- Optionally override `executeCustomTool()` for custom tool handling
 
 Current agent implementations:
-- `LutinChatAgent` — File management tools (list_files, read_file, write_file)
-- Future: `LutinEditorAgent` — For inline editor assistance
+- `LutinChatAgent` — File management agent
+  - Overrides `buildToolDefinitions()` to return `$this->selectTools(['list_files', 'read_file', 'write_file'])`
+  - Uses `addFileContentToPrompt()` to inject AGENTS.md content
+  - Inherits tool execution from base class
+- Future: `LutinEditorAgent` — Would select a different subset of tools and optionally override `executeCustomTool()`
 
 ---
 

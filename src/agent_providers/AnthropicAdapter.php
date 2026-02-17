@@ -98,4 +98,12 @@ class AnthropicAdapter implements LutinProviderAdapter {
         $stopReason = $data['stop_reason'] ?? 'end_turn';
         yield 'data: ' . json_encode(['type' => 'stop', 'stop_reason' => $stopReason]) . "\n\n";
     }
+
+    /**
+     * Anthropic uses tools in the generic format directly.
+     * No transformation needed.
+     */
+    public function formatTools(array $tools): array {
+        return $tools;
+    }
 }

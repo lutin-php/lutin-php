@@ -12,7 +12,7 @@ require_once __DIR__ . '/../src/classes/LutinFileManager.php';
 require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
 require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
 require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
-require_once __DIR__ . '/../src/agents/LutinAgent.php';
+require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
 require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
 require_once __DIR__ . '/../src/classes/LutinView.php';
 require_once __DIR__ . '/../src/classes/LutinRouter.php';
@@ -64,7 +64,7 @@ $tests['LutinChatAgent::instantiation (Anthropic)'] = function() use ($scratch) 
     $fm = new LutinFileManager($config);
     $agent = new LutinChatAgent($config, $fm);
     assert_true($agent instanceof LutinChatAgent, 'LutinChatAgent should instantiate');
-    assert_true($agent instanceof LutinAgent, 'LutinChatAgent should extend LutinAgent');
+    assert_true($agent instanceof AbstractLutinAgent, 'LutinChatAgent should extend AbstractLutinAgent');
 };
 
 // Test: LutinChatAgent instantiation with OpenAI

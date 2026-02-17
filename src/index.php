@@ -19,7 +19,7 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
     require_once __DIR__ . '/agent_providers/OpenAIAdapter.php';
     // Agent classes
-    require_once __DIR__ . '/agents/LutinAgent.php';
+    require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';

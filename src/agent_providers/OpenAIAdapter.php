@@ -112,4 +112,26 @@ class OpenAIAdapter implements LutinProviderAdapter {
         $finishReason = $data['choices'][0]['finish_reason'] ?? 'stop';
         yield 'data: ' . json_encode(['type' => 'stop', 'stop_reason' => $finishReason]) . "\n\n";
     }
+
+    /**
+     * OpenAI wraps each tool in a specific structure:
+     * [
+     *   'type' => 'function',
+     *   'function' => [name, description, parameters]
+     * ]
+     * 
+     * Note: We map 'input_schema' to 'parameters' for OpenAI.
+     */
+    public function formatTools(array $tools): array {
+        return array_map(function($tool) {
+            return [
+                'type' => 'function',
+                'function' => [
+                    'name' => $tool['name'],
+                    'description' => $tool['description'],
+                    'parameters' => $tool['input_schema'],
+                ],
+            ];
+        }, $tools);
+    }
 }

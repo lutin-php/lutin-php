@@ -15,9 +15,27 @@ interface LutinProviderAdapter {
      *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
      * 
      * @param array $messages The conversation history
-     * @param array $tools Tool definitions for the provider
+     * @param array $tools Tool definitions for the provider (already formatted for this provider)
      * @param string $systemPrompt The system prompt to use
      * @return \Generator Yields SSE-formatted strings
      */
     public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
+
+    /**
+     * Formats generic tool definitions to the provider-specific format.
+     * 
+     * Generic format:
+     * [
+     *   [
+     *     'name' => 'tool_name',
+     *     'description' => '...',
+     *     'input_schema' => [...]
+     *   ],
+     *   ...
+     * ]
+     * 
+     * @param array $tools Generic tool definitions
+     * @return array Provider-specific tool definitions
+     */
+    public function formatTools(array $tools): array;
 }

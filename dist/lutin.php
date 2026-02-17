@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-02-17 09:46:43
+// Built: 2026-02-17 11:56:26
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -1176,11 +1176,29 @@ interface LutinProviderAdapter {
      *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
      * 
      * @param array $messages The conversation history
-     * @param array $tools Tool definitions for the provider
+     * @param array $tools Tool definitions for the provider (already formatted for this provider)
      * @param string $systemPrompt The system prompt to use
      * @return \Generator Yields SSE-formatted strings
      */
     public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
+
+    /**
+     * Formats generic tool definitions to the provider-specific format.
+     * 
+     * Generic format:
+     * [
+     *   [
+     *     'name' => 'tool_name',
+     *     'description' => '...',
+     *     'input_schema' => [...]
+     *   ],
+     *   ...
+     * ]
+     * 
+     * @param array $tools Generic tool definitions
+     * @return array Provider-specific tool definitions
+     */
+    public function formatTools(array $tools): array;
 }
 
 // ── AnthropicAdapter.php ─────
@@ -1280,6 +1298,14 @@ class AnthropicAdapter implements LutinProviderAdapter {
         // Yield stop signal
         $stopReason = $data['stop_reason'] ?? 'end_turn';
         yield 'data: ' . json_encode(['type' => 'stop', 'stop_reason' => $stopReason]) . "\n\n";
+    }
+
+    /**
+     * Anthropic uses tools in the generic format directly.
+     * No transformation needed.
+     */
+    public function formatTools(array $tools): array {
+        return $tools;
     }
 }
 
@@ -1395,17 +1421,78 @@ class OpenAIAdapter implements LutinProviderAdapter {
         $finishReason = $data['choices'][0]['finish_reason'] ?? 'stop';
         yield 'data: ' . json_encode(['type' => 'stop', 'stop_reason' => $finishReason]) . "\n\n";
     }
+
+    /**
+     * OpenAI wraps each tool in a specific structure:
+     * [
+     *   'type' => 'function',
+     *   'function' => [name, description, parameters]
+     * ]
+     * 
+     * Note: We map 'input_schema' to 'parameters' for OpenAI.
+     */
+    public function formatTools(array $tools): array {
+        return array_map(function($tool) {
+            return [
+                'type' => 'function',
+                'function' => [
+                    'name' => $tool['name'],
+                    'description' => $tool['description'],
+                    'parameters' => $tool['input_schema'],
+                ],
+            ];
+        }, $tools);
+    }
 }
 
-// ── LutinAgent.php ─────
+// ── AbstractLutinAgent.php ─────
 /**
  * Base class for all Lutin AI agents.
- * Provides common infrastructure: provider adapter, message history, agentic loop, and SSE output.
- * Subclasses must implement tool definitions and tool execution logic.
+ * Provides common infrastructure: provider adapter, message history, agentic loop, SSE output,
+ * and file management tool execution.
+ * Subclasses must implement buildSystemPrompt and select tools via buildToolDefinitions().
  */
-abstract class LutinAgent {
+abstract class AbstractLutinAgent {
     /** Maximum number of iterations in the agentic loop to prevent infinite loops */
     protected const MAX_ITERATIONS = 10;
+
+    /** Full list of all available tools */
+    protected const COMMON_AVAILABLE_TOOLS = [
+        'list_files' => [
+            'name' => 'list_files',
+            'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
+                ],
+                'required' => ['path'],
+            ],
+        ],
+        'read_file' => [
+            'name' => 'read_file',
+            'description' => 'Reads a file. Path is relative to project root.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                ],
+                'required' => ['path'],
+            ],
+        ],
+        'write_file' => [
+            'name' => 'write_file',
+            'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                    'content' => ['type' => 'string', 'description' => 'File content'],
+                ],
+                'required' => ['path', 'content'],
+            ],
+        ],
+    ];
 
     protected LutinConfig $config;
     protected LutinFileManager $fm;
@@ -1417,50 +1504,13 @@ abstract class LutinAgent {
     /** Tool definitions sent to the API */
     protected array $toolDefinitions;
 
-    /** Cached system prompt (base + AGENTS.md if present) */
-    protected ?string $systemPrompt = null;
-
-    /**
-     * Base system prompt. Subclasses can override or extend this.
-     */
-    protected function getBaseSystemPrompt(): string {
-        return 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
-            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
-            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
-            'When asked to create or modify a page, read the existing files first to understand the structure.';
-    }
-
     public function __construct(LutinConfig $config, LutinFileManager $fm) {
         $this->config = $config;
         $this->fm = $fm;
         $this->adapter = $this->buildAdapter();
-        $this->toolDefinitions = $this->buildToolDefinitions();
-    }
-
-    /**
-     * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
-     * The AGENTS.md file is read from the lutin directory.
-     */
-    protected function buildSystemPrompt(): string {
-        if ($this->systemPrompt !== null) {
-            return $this->systemPrompt;
-        }
-
-        $basePrompt = $this->getBaseSystemPrompt();
-
-        $lutinDir = $this->config->getLutinDir();
-        $agentsMdPath = $lutinDir . '/AGENTS.md';
-
-        if (file_exists($agentsMdPath) && is_readable($agentsMdPath)) {
-            $agentsContent = file_get_contents($agentsMdPath);
-            if ($agentsContent !== false) {
-                $basePrompt .= "\n\n---\n\nThe following is additional context about this specific project from AGENTS.md:\n\n" . $agentsContent;
-            }
-        }
-
-        $this->systemPrompt = $basePrompt;
-        return $basePrompt;
+        // Build provider-agnostic tools (subclass defines which tools via buildToolDefinitions), then format for the specific provider
+        $rawTools = $this->buildToolDefinitions();
+        $this->toolDefinitions = $this->adapter->formatTools($rawTools);
     }
 
     /**
@@ -1484,20 +1534,93 @@ abstract class LutinAgent {
     }
 
     /**
-     * Returns the tool schema array in the format expected by the current provider.
-     * Subclasses must implement this to define their available tools.
+     * Builds the system prompt.
+     * Subclasses must implement this to define their system prompt.
      */
-    abstract protected function buildToolDefinitions(): array;
+    abstract protected function buildSystemPrompt(): string;
+
+    /**
+     * Returns the tool schema array in provider-agnostic format.
+     * Subclasses override this to select which tools they want from COMMON_AVAILABLE_TOOLS.
+     * 
+     * @return array Provider-agnostic tool definitions
+     */
+    protected function buildToolDefinitions(): array {
+        // By default, return all available tools
+        // Subclasses should override to select specific tools via parent::buildToolDefinitions(['tool1', 'tool2'])
+        return array_values(self::COMMON_AVAILABLE_TOOLS);
+    }
+
+    /**
+     * Helper to select specific tools from COMMON_AVAILABLE_TOOLS.
+     * 
+     * @param string[] $toolNames List of tool names to include
+     * @return array Provider-agnostic tool definitions
+     */
+    protected function selectTools(array $toolNames): array {
+        $tools = [];
+        foreach ($toolNames as $name) {
+            if (isset(self::COMMON_AVAILABLE_TOOLS[$name])) {
+                $tools[] = self::COMMON_AVAILABLE_TOOLS[$name];
+            }
+        }
+        return $tools;
+    }
+
+    /**
+     * Helper method to append file content to a prompt.
+     * 
+     * @param string $prompt The current prompt
+     * @param string $filePath Path to the file to read
+     * @param string $label Label to include before the content (e.g., "AGENTS.md")
+     * @return string The updated prompt
+     */
+    protected function addFileContentToPrompt(string $prompt, string $filePath, string $label): string {
+        if (file_exists($filePath) && is_readable($filePath)) {
+            $content = file_get_contents($filePath);
+            if ($content !== false) {
+                $prompt .= "\n\n---\n\nThe following is additional context about this specific project from {$label}:\n\n" . $content;
+            }
+        }
+        return $prompt;
+    }
 
     /**
      * Executes a tool call from the AI.
-     * Subclasses must implement this to handle their specific tools.
+     * Handles file management tools from COMMON_AVAILABLE_TOOLS.
+     * Subclasses can override to add custom tool handling.
      * 
      * @param string $name The tool name
      * @param array $input The tool input parameters
      * @return string The result as a string (typically JSON-encoded)
      */
-    abstract protected function executeTool(string $name, array $input): string;
+    protected function executeTool(string $name, array $input): string {
+        try {
+            return match ($name) {
+                'list_files' => json_encode($this->fm->listFiles($input['path'] ?? '')),
+                'read_file' => $this->fm->readFile($input['path'] ?? ''),
+                'write_file' => (function() use ($input) {
+                    $this->fm->writeFile($input['path'] ?? '', $input['content'] ?? '');
+                    return json_encode(['ok' => true]);
+                })(),
+                default => $this->executeCustomTool($name, $input),
+            };
+        } catch (\Throwable $e) {
+            return 'Error: ' . $e->getMessage();
+        }
+    }
+
+    /**
+     * Hook for subclasses to implement custom tool execution.
+     * Called when a tool name is not recognized by executeTool().
+     * 
+     * @param string $name The tool name
+     * @param array $input The tool input parameters
+     * @return string The result as a string (typically JSON-encoded)
+     */
+    protected function executeCustomTool(string $name, array $input): string {
+        return 'Unknown tool: ' . $name;
+    }
 
     /**
      * Main entry point for agent interaction.
@@ -1660,89 +1783,51 @@ abstract class LutinAgent {
 /**
  * Chat Agent for Lutin.
  * Handles conversational AI interactions with file management capabilities.
- * Extends the base LutinAgent with specific tool definitions for file operations.
+ * Extends AbstractLutinAgent with specific tool definitions for file operations.
  */
-class LutinChatAgent extends LutinAgent {
+class LutinChatAgent extends AbstractLutinAgent {
+
+    /** Cached system prompt (base + AGENTS.md if present) */
+    private ?string $systemPrompt = null;
 
     /**
-     * Returns the tool schema array for file operations.
-     * Tools: list_files, read_file, write_file
+     * Base system prompt for the chat agent.
      */
-    protected function buildToolDefinitions(): array {
-        $provider = $this->config->getProvider();
-
-        $tools = [
-            [
-                'name' => 'list_files',
-                'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
-                    ],
-                    'required' => ['path'],
-                ],
-            ],
-            [
-                'name' => 'read_file',
-                'description' => 'Reads a file. Path is relative to project root.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                    ],
-                    'required' => ['path'],
-                ],
-            ],
-            [
-                'name' => 'write_file',
-                'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                        'content' => ['type' => 'string', 'description' => 'File content'],
-                    ],
-                    'required' => ['path', 'content'],
-                ],
-            ],
-        ];
-
-        if ($provider === 'openai') {
-            // OpenAI format
-            return array_map(function($tool) {
-                return [
-                    'type' => 'function',
-                    'function' => $tool,
-                ];
-            }, $tools);
-        }
-
-        // Anthropic format
-        return $tools;
+    protected function getBaseSystemPrompt(): string {
+        return 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
+            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
     }
 
     /**
-     * Dispatches a tool call from the AI to the appropriate LutinFileManager method.
-     * 
-     * @param string $name The tool name
-     * @param array $input The tool input parameters
-     * @return string The result as a string (typically JSON-encoded)
+     * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
+     * The AGENTS.md file is read from the lutin directory.
      */
-    protected function executeTool(string $name, array $input): string {
-        try {
-            return match ($name) {
-                'list_files' => json_encode($this->fm->listFiles($input['path'] ?? '')),
-                'read_file' => $this->fm->readFile($input['path'] ?? ''),
-                'write_file' => (function() use ($input) {
-                    $this->fm->writeFile($input['path'] ?? '', $input['content'] ?? '');
-                    return json_encode(['ok' => true]);
-                })(),
-                default => 'Unknown tool: ' . $name,
-            };
-        } catch (\Throwable $e) {
-            return 'Error: ' . $e->getMessage();
+    protected function buildSystemPrompt(): string {
+        if ($this->systemPrompt !== null) {
+            return $this->systemPrompt;
         }
+
+        $basePrompt = $this->getBaseSystemPrompt();
+
+        $lutinDir = $this->config->getLutinDir();
+        $agentsMdPath = $lutinDir . '/AGENTS.md';
+
+        $basePrompt = $this->addFileContentToPrompt($basePrompt, $agentsMdPath, 'AGENTS.md');
+
+        $this->systemPrompt = $basePrompt;
+        return $basePrompt;
+    }
+
+    /**
+     * Returns the tool schema array for file operations.
+     * 
+     * @return array Provider-agnostic tool definitions
+     */
+    protected function buildToolDefinitions(): array {
+        return $this->selectTools(['list_files', 'read_file', 'write_file']);
     }
 }
 
@@ -1751,14 +1836,14 @@ class LutinRouter {
     private LutinConfig $config;
     private LutinAuth $auth;
     private LutinFileManager $fm;
-    private ?LutinChatAgent $agent;
+    private ?AbstractLutinAgent $agent;
     private LutinView $view;
 
     public function __construct(
         LutinConfig $config,
         LutinAuth $auth,
         LutinFileManager $fm,
-        ?LutinChatAgent $agent,
+        ?AbstractLutinAgent $agent,
         LutinView $view
     ) {
         $this->config = $config;
@@ -1771,7 +1856,7 @@ class LutinRouter {
     /**
      * Lazily initialize the agent when needed.
      */
-    private function getAgent(): LutinChatAgent {
+    private function getAgent(): AbstractLutinAgent {
         if ($this->agent === null) {
             $this->agent = new LutinChatAgent($this->config, $this->fm);
         }
@@ -4334,7 +4419,7 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
     require_once __DIR__ . '/agent_providers/OpenAIAdapter.php';
     // Agent classes
-    require_once __DIR__ . '/agents/LutinAgent.php';
+    require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';

@@ -15,7 +15,7 @@ $classFiles = [
     'src/agent_providers/AnthropicAdapter.php',
     'src/agent_providers/OpenAIAdapter.php',
     // Agent classes
-    'src/agents/LutinAgent.php',
+    'src/agents/AbstractLutinAgent.php',
     'src/agents/LutinChatAgent.php',
     'src/classes/LutinRouter.php',
     'src/classes/LutinView.php',

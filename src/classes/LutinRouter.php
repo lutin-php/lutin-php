@@ -5,14 +5,14 @@ class LutinRouter {
     private LutinConfig $config;
     private LutinAuth $auth;
     private LutinFileManager $fm;
-    private ?LutinChatAgent $agent;
+    private ?AbstractLutinAgent $agent;
     private LutinView $view;
 
     public function __construct(
         LutinConfig $config,
         LutinAuth $auth,
         LutinFileManager $fm,
-        ?LutinChatAgent $agent,
+        ?AbstractLutinAgent $agent,
         LutinView $view
     ) {
         $this->config = $config;
@@ -25,7 +25,7 @@ class LutinRouter {
     /**
      * Lazily initialize the agent when needed.
      */
-    private function getAgent(): LutinChatAgent {
+    private function getAgent(): AbstractLutinAgent {
         if ($this->agent === null) {
             $this->agent = new LutinChatAgent($this->config, $this->fm);
         }
