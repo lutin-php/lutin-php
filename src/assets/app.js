@@ -10,9 +10,25 @@ const state = {
   isStreaming: false,       // true while SSE is open
 };
 
+// ── TAB DETECTION ─────────────────────────────────────────────────────────────
+function getCurrentTab() {
+  // First try URL hash
+  if (location.hash) {
+    return location.hash.slice(1);
+  }
+  // Fall back to visible tab
+  const visibleSection = document.querySelector('section[style*="display: block"]') ||
+                          document.querySelector('section');
+  if (visibleSection) {
+    return visibleSection.id.replace('tab-', '');
+  }
+  return 'chat'; // Default
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 async function apiPost(action, body) {
-  const response = await fetch(`?action=${action}`, {
+  const tab = getCurrentTab();
+  const response = await fetch(`?action=${action}&tab=${tab}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -27,7 +43,8 @@ async function apiPost(action, body) {
 }
 
 async function apiGet(action, params = {}) {
-  const query = new URLSearchParams({ action, ...params }).toString();
+  const tab = getCurrentTab();
+  const query = new URLSearchParams({ action, tab, ...params }).toString();
   const response = await fetch(`?${query}`, {
     headers: {
       'X-Lutin-Token': state.csrfToken,
@@ -189,7 +206,7 @@ async function openChatStream(userText, loadingId) {
   let receivedAnyData = false;
   
   try {
-    const response = await fetch('?action=chat', {
+    const response = await fetch('?action=chat&tab=chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -703,7 +720,7 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
   try {
     // Use the dedicated editor_chat endpoint
     // The server will handle current file context automatically
-    const response = await fetch('?action=editor_chat', {
+    const response = await fetch('?action=editor_chat&tab=editor', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -14,6 +14,11 @@ require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
 require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
 require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
 require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
+require_once __DIR__ . '/../src/agents/LutinEditorAgent.php';
+require_once __DIR__ . '/../src/pages/AbstractLutinPage.php';
+require_once __DIR__ . '/../src/pages/LutinChatPage.php';
+require_once __DIR__ . '/../src/pages/LutinEditorPage.php';
+require_once __DIR__ . '/../src/pages/LutinConfigPage.php';
 require_once __DIR__ . '/../src/classes/LutinView.php';
 require_once __DIR__ . '/../src/classes/LutinRouter.php';
 
@@ -125,12 +130,12 @@ $tests['LutinRouter::initialization'] = function() use ($scratch) {
     $fm = new LutinFileManager($config);
     $view = new LutinView($config, $auth);
 
-    $router = new LutinRouter($config, $auth, $fm, null, $view);
+    $router = new LutinRouter($config, $auth, $fm, $view);
     assert_true($router instanceof LutinRouter, 'Router should instantiate with all dependencies');
 };
 
-// Test: handleChat method exists
-$tests['LutinRouter::handleChat (exists)'] = function() use ($scratch) {
+// Test: LutinChatPage instantiation
+$tests['LutinChatPage::instantiation'] = function() use ($scratch) {
     $projectRoot = $scratch . '/site5';
     $webRoot = $projectRoot;
     $lutinDir = $projectRoot . '/lutin';
@@ -147,10 +152,9 @@ $tests['LutinRouter::handleChat (exists)'] = function() use ($scratch) {
     $auth->startSession();
 
     $fm = new LutinFileManager($config);
-    $view = new LutinView($config, $auth);
-
-    $reflection = new ReflectionClass(new LutinRouter($config, $auth, $fm, null, $view));
-    assert_true($reflection->hasMethod('handleChat'), 'Router should have handleChat method');
+    $page = new LutinChatPage($config, $auth, $fm);
+    
+    assert_true($page instanceof AbstractLutinPage, 'LutinChatPage should extend AbstractLutinPage');
 };
 
 // Test: AnthropicAdapter stream returns generator

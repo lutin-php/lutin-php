@@ -22,6 +22,11 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/agents/LutinEditorAgent.php';
+    // Page controllers
+    require_once __DIR__ . '/pages/AbstractLutinPage.php';
+    require_once __DIR__ . '/pages/LutinChatPage.php';
+    require_once __DIR__ . '/pages/LutinEditorPage.php';
+    require_once __DIR__ . '/pages/LutinConfigPage.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }
@@ -37,6 +42,5 @@ $auth->startSession();
 $fm    = new LutinFileManager($config);
 $view  = new LutinView($config, $auth);
 
-// Agent is initialized lazily by router when needed
-$router = new LutinRouter($config, $auth, $fm, null, $view);
+$router = new LutinRouter($config, $auth, $fm, $view);
 $router->dispatch();

@@ -1,49 +1,33 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Main Router for Lutin.
+ * Routes actions to the appropriate Page class based on the 'tab' parameter.
+ */
 class LutinRouter {
     private LutinConfig $config;
     private LutinAuth $auth;
     private LutinFileManager $fm;
-    private ?AbstractLutinAgent $agent;
     private LutinView $view;
+
+    /** Map tabs to their page controller classes */
+    private const TAB_PAGES = [
+        'chat'   => LutinChatPage::class,
+        'editor' => LutinEditorPage::class,
+        'config' => LutinConfigPage::class,
+    ];
 
     public function __construct(
         LutinConfig $config,
         LutinAuth $auth,
         LutinFileManager $fm,
-        ?AbstractLutinAgent $agent,
         LutinView $view
     ) {
         $this->config = $config;
         $this->auth = $auth;
         $this->fm = $fm;
-        $this->agent = $agent;
         $this->view = $view;
-    }
-
-    /**
-     * Lazily initialize the chat agent when needed.
-     */
-    private function getAgent(): AbstractLutinAgent {
-        if ($this->agent === null) {
-            $this->agent = new LutinChatAgent($this->config, $this->fm);
-        }
-        return $this->agent;
-    }
-
-    /**
-     * Lazily initialize the editor agent when needed.
-     */
-    private function getEditorAgent(): LutinEditorAgent {
-        if ($this->agent === null) {
-            $this->agent = new LutinEditorAgent($this->config, $this->fm);
-        }
-        // Ensure we always return a LutinEditorAgent
-        if (!($this->agent instanceof LutinEditorAgent)) {
-            $this->agent = new LutinEditorAgent($this->config, $this->fm);
-        }
-        return $this->agent;
     }
 
     /**
@@ -51,67 +35,52 @@ class LutinRouter {
      */
     public function dispatch(): void {
         $action = $_GET['action'] ?? null;
+        $tab = $_GET['tab'] ?? null;
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
         try {
-            // Route dispatch
-            if ($method === 'GET' && $action === null) {
-                $this->renderPage();
-            } elseif ($method === 'POST' && $action === 'setup') {
-                $this->handleSetup();
-            } elseif ($method === 'POST' && $action === 'login') {
-                $this->handleLogin();
-            } elseif ($method === 'POST' && $action === 'logout') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleLogout();
-            } elseif ($method === 'POST' && $action === 'chat') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleChat();
-            } elseif ($method === 'POST' && $action === 'editor_chat') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleEditorChat();
-            } elseif ($method === 'GET' && $action === 'list') {
-                $this->requireAuth();
-                $this->handleList();
-            } elseif ($method === 'GET' && $action === 'search') {
-                $this->requireAuth();
-                $this->handleSearch();
-            } elseif ($method === 'GET' && $action === 'read') {
-                $this->requireAuth();
-                $this->handleRead();
-            } elseif ($method === 'POST' && $action === 'write') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleWrite();
-            } elseif ($method === 'GET' && $action === 'backups') {
-                $this->requireAuth();
-                $this->handleBackups();
-            } elseif ($method === 'POST' && $action === 'restore') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleRestore();
-            } elseif ($method === 'GET' && $action === 'url_map') {
-                $this->requireAuth();
-                $this->handleUrlMap();
-            } elseif ($method === 'POST' && $action === 'config') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleConfigSave();
-            } elseif ($method === 'GET' && $action === 'templates') {
-                $this->requireAuth();
-                $this->handleTemplatesList();
-            } elseif ($method === 'POST' && $action === 'install_template') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleInstallTemplate();
-            } else {
-                $this->jsonError('Unknown action', 404);
+            // Route to page based on tab parameter (if valid)
+            if ($tab !== null && isset(self::TAB_PAGES[$tab])) {
+                $pageClass = self::TAB_PAGES[$tab];
+                $page = new $pageClass($this->config, $this->auth, $this->fm);
+                $page->handle($action ?? '', $method);
+                return;
             }
+
+            // Fall back to global handlers for non-tab actions (setup, login, etc.)
+            $this->dispatchGlobal($action, $method);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Dispatch global actions not handled by page controllers.
+     */
+    private function dispatchGlobal(?string $action, string $method): void {
+        // Route dispatch
+        if ($method === 'GET' && $action === null) {
+            $this->renderPage();
+        } elseif ($method === 'POST' && $action === 'setup') {
+            $this->handleSetup();
+        } elseif ($method === 'POST' && $action === 'login') {
+            $this->handleLogin();
+        } elseif ($method === 'POST' && $action === 'logout') {
+            $this->requireAuth();
+            $this->requireCsrf();
+            $this->handleLogout();
+        } elseif ($method === 'GET' && $action === 'url_map') {
+            $this->requireAuth();
+            $this->handleUrlMap();
+        } elseif ($method === 'GET' && $action === 'templates') {
+            $this->requireAuth();
+            $this->handleTemplatesList();
+        } elseif ($method === 'POST' && $action === 'install_template') {
+            $this->requireAuth();
+            $this->requireCsrf();
+            $this->handleInstallTemplate();
+        } else {
+            $this->jsonError('Unknown action', 404);
         }
     }
 
@@ -196,152 +165,12 @@ class LutinRouter {
         $this->jsonOk([]);
     }
 
-    private function handleChat(): void {
-        $body = $this->getBody();
-        $message = $body['message'] ?? '';
-        $history = $body['history'] ?? [];
-
-        if (empty($message)) {
-            $this->jsonError('Message required', 400);
-            return;
-        }
-
-        $this->getAgent()->chat($message, $history);
-    }
-
-    private function handleEditorChat(): void {
-        $body = $this->getBody();
-        $message = $body['message'] ?? '';
-        $history = $body['history'] ?? [];
-        $currentFile = $body['current_file'] ?? null;
-        $currentContent = $body['current_content'] ?? null;
-
-        if (empty($message)) {
-            $this->jsonError('Message required', 400);
-            return;
-        }
-
-        $agent = $this->getEditorAgent();
-        $agent->setCurrentFile($currentFile, $currentContent);
-        $agent->chat($message, $history);
-    }
-
-    private function handleList(): void {
-        $path = $_GET['path'] ?? '';
-
-        try {
-            $files = $this->fm->listFiles($path);
-            $this->jsonOk($files);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleSearch(): void {
-        $query = $_GET['q'] ?? '';
-        $strict = ($_GET['strict'] ?? 'false') === 'true';
-        $filesOnly = ($_GET['files_only'] ?? 'true') === 'true';
-        $limit = min((int)($_GET['limit'] ?? 20), 100);
-
-        if (empty($query)) {
-            $this->jsonOk([]);
-            return;
-        }
-
-        try {
-            $options = [
-                'recursive' => true,
-                'search_pattern' => $query,
-                'strict_mode' => $strict,
-                'file_only' => $filesOnly,
-            ];
-            $files = $this->fm->listFiles('', $options);
-            
-            // Limit results
-            if (count($files) > $limit) {
-                $files = array_slice($files, 0, $limit);
-            }
-            
-            $this->jsonOk($files);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleRead(): void {
-        $path = $_GET['path'] ?? '';
-
-        try {
-            $content = $this->fm->readFile($path);
-            $this->jsonOk(['path' => $path, 'content' => $content]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleWrite(): void {
-        $body = $this->getBody();
-        $path = $body['path'] ?? '';
-        $content = $body['content'] ?? '';
-
-        try {
-            $this->fm->writeFile($path, $content);
-            $this->jsonOk(['ok' => true]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleBackups(): void {
-        try {
-            $backups = $this->fm->listBackups();
-            $this->jsonOk($backups);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleRestore(): void {
-        $body = $this->getBody();
-        $backupPath = $body['path'] ?? '';
-
-        try {
-            $restoredPath = $this->fm->restore($backupPath);
-            $this->jsonOk(['restored_to' => $restoredPath]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
     private function handleUrlMap(): void {
         $url = $_GET['url'] ?? '';
 
         try {
             $candidates = $this->fm->urlToFile($url);
             $this->jsonOk($candidates);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleConfigSave(): void {
-        $body = $this->getBody();
-
-        try {
-            if (!empty($body['provider'])) {
-                $this->config->setProvider($body['provider']);
-            }
-            if (!empty($body['api_key'])) {
-                $this->config->setApiKey($body['api_key']);
-            }
-            if (!empty($body['model'])) {
-                $this->config->setModel($body['model']);
-            }
-            if (!empty($body['site_url'])) {
-                $this->config->setSiteUrl($body['site_url']);
-            }
-            $this->config->save();
-            $this->jsonOk([]);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 400);
         }

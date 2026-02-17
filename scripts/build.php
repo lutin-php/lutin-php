@@ -18,6 +18,11 @@ $classFiles = [
     'src/agents/AbstractLutinAgent.php',
     'src/agents/LutinChatAgent.php',
     'src/agents/LutinEditorAgent.php',
+    // Page controllers
+    'src/pages/AbstractLutinPage.php',
+    'src/pages/LutinChatPage.php',
+    'src/pages/LutinEditorPage.php',
+    'src/pages/LutinConfigPage.php',
     'src/classes/LutinRouter.php',
     'src/classes/LutinView.php',
 ];

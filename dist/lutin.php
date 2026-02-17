@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-02-17 12:29:55
+// Built: 2026-02-17 13:30:00
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -1973,50 +1973,411 @@ class LutinEditorAgent extends AbstractLutinAgent {
     }
 }
 
-// ── LutinRouter.php ─────
-class LutinRouter {
-    private LutinConfig $config;
-    private LutinAuth $auth;
-    private LutinFileManager $fm;
-    private ?AbstractLutinAgent $agent;
-    private LutinView $view;
+// ── AbstractLutinPage.php ─────
+/**
+ * Base class for all Lutin page controllers.
+ * Provides common infrastructure for handling page-specific actions and rendering.
+ */
+abstract class AbstractLutinPage {
+    protected LutinConfig $config;
+    protected LutinAuth $auth;
+    protected LutinFileManager $fm;
 
-    public function __construct(
-        LutinConfig $config,
-        LutinAuth $auth,
-        LutinFileManager $fm,
-        ?AbstractLutinAgent $agent,
-        LutinView $view
-    ) {
+    public function __construct(LutinConfig $config, LutinAuth $auth, LutinFileManager $fm) {
         $this->config = $config;
         $this->auth = $auth;
         $this->fm = $fm;
-        $this->agent = $agent;
-        $this->view = $view;
+    }
+
+    /**
+     * Handle an action request.
+     * Subclasses should implement this to route actions to specific handlers.
+     *
+     * @param string $action The action name
+     * @param string $method HTTP method (GET, POST, etc.)
+     */
+    abstract public function handle(string $action, string $method): void;
+
+    /**
+     * Helper: Send JSON success response
+     */
+    protected function jsonOk(mixed $data): void {
+        header('Content-Type: application/json');
+        echo json_encode(['ok' => true, 'data' => $data]);
+        exit(0);
+    }
+
+    /**
+     * Helper: Send JSON error response
+     */
+    protected function jsonError(string $message, int $httpCode = 400): void {
+        http_response_code($httpCode);
+        header('Content-Type: application/json');
+        echo json_encode(['ok' => false, 'error' => $message]);
+        exit(0);
+    }
+
+    /**
+     * Helper: Get request body as array
+     */
+    protected function getBody(): array {
+        $json = file_get_contents('php://input');
+        return json_decode($json, true, 512, JSON_THROW_ON_ERROR) ?? [];
+    }
+
+    /**
+     * Helper: Require authentication
+     */
+    protected function requireAuth(): void {
+        if (!$this->auth->isAuthenticated()) {
+            $this->jsonError('Unauthorized', 401);
+        }
+    }
+
+    /**
+     * Helper: Verify CSRF token from header
+     */
+    protected function requireCsrf(): void {
+        $token = $_SERVER['HTTP_X_LUTIN_TOKEN'] ?? '';
+        try {
+            $this->auth->assertCsrfToken($token);
+        } catch (\Throwable) {
+            $this->jsonError('CSRF token invalid', 403);
+        }
+    }
+}
+
+// ── LutinChatPage.php ─────
+/**
+ * Chat Page Controller.
+ * Handles chat-related actions and AI interactions for the chat tab.
+ */
+class LutinChatPage extends AbstractLutinPage {
+
+    private ?LutinChatAgent $agent = null;
+
+    /**
+     * Handle chat-specific actions.
+     */
+    public function handle(string $action, string $method): void {
+        $this->requireAuth();
+
+        switch ($action) {
+            case 'chat':
+                if ($method === 'POST') {
+                    $this->requireCsrf();
+                    $this->handleChat();
+                    return;
+                }
+                break;
+        }
+
+        $this->jsonError('Unknown chat action', 404);
+    }
+
+    // ── AI Chat ────────────────────────────────────────────────────────────────
+
+    private function handleChat(): void {
+        $body = $this->getBody();
+        $message = $body['message'] ?? '';
+        $history = $body['history'] ?? [];
+
+        if (empty($message)) {
+            $this->jsonError('Message required', 400);
+            return;
+        }
+
+        $this->getAgent()->chat($message, $history);
+        // Note: chat() exits after SSE stream completes
     }
 
     /**
      * Lazily initialize the chat agent when needed.
      */
-    private function getAgent(): AbstractLutinAgent {
+    private function getAgent(): LutinChatAgent {
         if ($this->agent === null) {
             $this->agent = new LutinChatAgent($this->config, $this->fm);
         }
         return $this->agent;
     }
+}
+
+// ── LutinEditorPage.php ─────
+/**
+ * Editor Page Controller.
+ * Handles all editor-related actions: file operations and AI chat.
+ */
+class LutinEditorPage extends AbstractLutinPage {
+
+    private ?LutinEditorAgent $agent = null;
+
+    /**
+     * Handle editor-specific actions.
+     * These are the standard file operations used by the editor tab.
+     */
+    public function handle(string $action, string $method): void {
+        $this->requireAuth();
+
+        switch ($action) {
+            // File operations (used by editor file explorer)
+            case 'list':
+                if ($method === 'GET') {
+                    $this->handleList();
+                    return;
+                }
+                break;
+
+            case 'read':
+                if ($method === 'GET') {
+                    $this->handleRead();
+                    return;
+                }
+                break;
+
+            case 'write':
+                if ($method === 'POST') {
+                    $this->requireCsrf();
+                    $this->handleWrite();
+                    return;
+                }
+                break;
+
+            case 'search':
+                if ($method === 'GET') {
+                    $this->handleSearch();
+                    return;
+                }
+                break;
+
+            // AI Chat (editor-specific)
+            case 'editor_chat':
+                if ($method === 'POST') {
+                    $this->requireCsrf();
+                    $this->handleChat();
+                    return;
+                }
+                break;
+        }
+
+        $this->jsonError('Unknown editor action', 404);
+    }
+
+    // ── File Operations ────────────────────────────────────────────────────────
+
+    private function handleList(): void {
+        $path = $_GET['path'] ?? '';
+
+        try {
+            $files = $this->fm->listFiles($path);
+            $this->jsonOk($files);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleRead(): void {
+        $path = $_GET['path'] ?? '';
+
+        try {
+            $content = $this->fm->readFile($path);
+            $this->jsonOk(['path' => $path, 'content' => $content]);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleWrite(): void {
+        $body = $this->getBody();
+        $path = $body['path'] ?? '';
+        $content = $body['content'] ?? '';
+
+        try {
+            $this->fm->writeFile($path, $content);
+            $this->jsonOk(['ok' => true]);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleSearch(): void {
+        $query = $_GET['q'] ?? '';
+        $strict = ($_GET['strict'] ?? 'false') === 'true';
+        $filesOnly = ($_GET['files_only'] ?? 'true') === 'true';
+        $limit = min((int)($_GET['limit'] ?? 20), 100);
+
+        if (empty($query)) {
+            $this->jsonOk([]);
+            return;
+        }
+
+        try {
+            $options = [
+                'recursive' => true,
+                'search_pattern' => $query,
+                'strict_mode' => $strict,
+                'file_only' => $filesOnly,
+            ];
+            $files = $this->fm->listFiles('', $options);
+            
+            if (count($files) > $limit) {
+                $files = array_slice($files, 0, $limit);
+            }
+            
+            $this->jsonOk($files);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    // ── AI Chat ────────────────────────────────────────────────────────────────
+
+    private function handleChat(): void {
+        $body = $this->getBody();
+        $message = $body['message'] ?? '';
+        $history = $body['history'] ?? [];
+        $currentFile = $body['current_file'] ?? null;
+        $currentContent = $body['current_content'] ?? null;
+
+        if (empty($message)) {
+            $this->jsonError('Message required', 400);
+            return;
+        }
+
+        $agent = $this->getAgent();
+        $agent->setCurrentFile($currentFile, $currentContent);
+        $agent->chat($message, $history);
+        // Note: chat() exits after SSE stream completes
+    }
 
     /**
      * Lazily initialize the editor agent when needed.
      */
-    private function getEditorAgent(): LutinEditorAgent {
+    private function getAgent(): LutinEditorAgent {
         if ($this->agent === null) {
             $this->agent = new LutinEditorAgent($this->config, $this->fm);
         }
-        // Ensure we always return a LutinEditorAgent
-        if (!($this->agent instanceof LutinEditorAgent)) {
-            $this->agent = new LutinEditorAgent($this->config, $this->fm);
-        }
         return $this->agent;
+    }
+}
+
+// ── LutinConfigPage.php ─────
+/**
+ * Config Page Controller.
+ * Handles configuration-related actions: settings, backups, and restore.
+ */
+class LutinConfigPage extends AbstractLutinPage {
+
+    /**
+     * Handle config-specific actions.
+     */
+    public function handle(string $action, string $method): void {
+        $this->requireAuth();
+
+        switch ($action) {
+            case 'config':
+                if ($method === 'POST') {
+                    $this->requireCsrf();
+                    $this->handleConfigSave();
+                    return;
+                }
+                break;
+
+            case 'backups':
+                if ($method === 'GET') {
+                    $this->handleBackups();
+                    return;
+                }
+                break;
+
+            case 'restore':
+                if ($method === 'POST') {
+                    $this->requireCsrf();
+                    $this->handleRestore();
+                    return;
+                }
+                break;
+        }
+
+        $this->jsonError('Unknown config action', 404);
+    }
+
+    // ── Configuration ──────────────────────────────────────────────────────────
+
+    private function handleConfigSave(): void {
+        $body = $this->getBody();
+
+        try {
+            if (!empty($body['provider'])) {
+                $this->config->setProvider($body['provider']);
+            }
+            if (!empty($body['api_key'])) {
+                $this->config->setApiKey($body['api_key']);
+            }
+            if (!empty($body['model'])) {
+                $this->config->setModel($body['model']);
+            }
+            if (!empty($body['site_url'])) {
+                $this->config->setSiteUrl($body['site_url']);
+            }
+            $this->config->save();
+            $this->jsonOk([]);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    // ── Backups ────────────────────────────────────────────────────────────────
+
+    private function handleBackups(): void {
+        try {
+            $backups = $this->fm->listBackups();
+            $this->jsonOk($backups);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleRestore(): void {
+        $body = $this->getBody();
+        $backupPath = $body['path'] ?? '';
+
+        try {
+            $restoredPath = $this->fm->restore($backupPath);
+            $this->jsonOk(['restored_to' => $restoredPath]);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+}
+
+// ── LutinRouter.php ─────
+/**
+ * Main Router for Lutin.
+ * Routes actions to the appropriate Page class based on the 'tab' parameter.
+ */
+class LutinRouter {
+    private LutinConfig $config;
+    private LutinAuth $auth;
+    private LutinFileManager $fm;
+    private LutinView $view;
+
+    /** Map tabs to their page controller classes */
+    private const TAB_PAGES = [
+        'chat'   => LutinChatPage::class,
+        'editor' => LutinEditorPage::class,
+        'config' => LutinConfigPage::class,
+    ];
+
+    public function __construct(
+        LutinConfig $config,
+        LutinAuth $auth,
+        LutinFileManager $fm,
+        LutinView $view
+    ) {
+        $this->config = $config;
+        $this->auth = $auth;
+        $this->fm = $fm;
+        $this->view = $view;
     }
 
     /**
@@ -2024,67 +2385,52 @@ class LutinRouter {
      */
     public function dispatch(): void {
         $action = $_GET['action'] ?? null;
+        $tab = $_GET['tab'] ?? null;
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
         try {
-            // Route dispatch
-            if ($method === 'GET' && $action === null) {
-                $this->renderPage();
-            } elseif ($method === 'POST' && $action === 'setup') {
-                $this->handleSetup();
-            } elseif ($method === 'POST' && $action === 'login') {
-                $this->handleLogin();
-            } elseif ($method === 'POST' && $action === 'logout') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleLogout();
-            } elseif ($method === 'POST' && $action === 'chat') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleChat();
-            } elseif ($method === 'POST' && $action === 'editor_chat') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleEditorChat();
-            } elseif ($method === 'GET' && $action === 'list') {
-                $this->requireAuth();
-                $this->handleList();
-            } elseif ($method === 'GET' && $action === 'search') {
-                $this->requireAuth();
-                $this->handleSearch();
-            } elseif ($method === 'GET' && $action === 'read') {
-                $this->requireAuth();
-                $this->handleRead();
-            } elseif ($method === 'POST' && $action === 'write') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleWrite();
-            } elseif ($method === 'GET' && $action === 'backups') {
-                $this->requireAuth();
-                $this->handleBackups();
-            } elseif ($method === 'POST' && $action === 'restore') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleRestore();
-            } elseif ($method === 'GET' && $action === 'url_map') {
-                $this->requireAuth();
-                $this->handleUrlMap();
-            } elseif ($method === 'POST' && $action === 'config') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleConfigSave();
-            } elseif ($method === 'GET' && $action === 'templates') {
-                $this->requireAuth();
-                $this->handleTemplatesList();
-            } elseif ($method === 'POST' && $action === 'install_template') {
-                $this->requireAuth();
-                $this->requireCsrf();
-                $this->handleInstallTemplate();
-            } else {
-                $this->jsonError('Unknown action', 404);
+            // Route to page based on tab parameter (if valid)
+            if ($tab !== null && isset(self::TAB_PAGES[$tab])) {
+                $pageClass = self::TAB_PAGES[$tab];
+                $page = new $pageClass($this->config, $this->auth, $this->fm);
+                $page->handle($action ?? '', $method);
+                return;
             }
+
+            // Fall back to global handlers for non-tab actions (setup, login, etc.)
+            $this->dispatchGlobal($action, $method);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Dispatch global actions not handled by page controllers.
+     */
+    private function dispatchGlobal(?string $action, string $method): void {
+        // Route dispatch
+        if ($method === 'GET' && $action === null) {
+            $this->renderPage();
+        } elseif ($method === 'POST' && $action === 'setup') {
+            $this->handleSetup();
+        } elseif ($method === 'POST' && $action === 'login') {
+            $this->handleLogin();
+        } elseif ($method === 'POST' && $action === 'logout') {
+            $this->requireAuth();
+            $this->requireCsrf();
+            $this->handleLogout();
+        } elseif ($method === 'GET' && $action === 'url_map') {
+            $this->requireAuth();
+            $this->handleUrlMap();
+        } elseif ($method === 'GET' && $action === 'templates') {
+            $this->requireAuth();
+            $this->handleTemplatesList();
+        } elseif ($method === 'POST' && $action === 'install_template') {
+            $this->requireAuth();
+            $this->requireCsrf();
+            $this->handleInstallTemplate();
+        } else {
+            $this->jsonError('Unknown action', 404);
         }
     }
 
@@ -2169,152 +2515,12 @@ class LutinRouter {
         $this->jsonOk([]);
     }
 
-    private function handleChat(): void {
-        $body = $this->getBody();
-        $message = $body['message'] ?? '';
-        $history = $body['history'] ?? [];
-
-        if (empty($message)) {
-            $this->jsonError('Message required', 400);
-            return;
-        }
-
-        $this->getAgent()->chat($message, $history);
-    }
-
-    private function handleEditorChat(): void {
-        $body = $this->getBody();
-        $message = $body['message'] ?? '';
-        $history = $body['history'] ?? [];
-        $currentFile = $body['current_file'] ?? null;
-        $currentContent = $body['current_content'] ?? null;
-
-        if (empty($message)) {
-            $this->jsonError('Message required', 400);
-            return;
-        }
-
-        $agent = $this->getEditorAgent();
-        $agent->setCurrentFile($currentFile, $currentContent);
-        $agent->chat($message, $history);
-    }
-
-    private function handleList(): void {
-        $path = $_GET['path'] ?? '';
-
-        try {
-            $files = $this->fm->listFiles($path);
-            $this->jsonOk($files);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleSearch(): void {
-        $query = $_GET['q'] ?? '';
-        $strict = ($_GET['strict'] ?? 'false') === 'true';
-        $filesOnly = ($_GET['files_only'] ?? 'true') === 'true';
-        $limit = min((int)($_GET['limit'] ?? 20), 100);
-
-        if (empty($query)) {
-            $this->jsonOk([]);
-            return;
-        }
-
-        try {
-            $options = [
-                'recursive' => true,
-                'search_pattern' => $query,
-                'strict_mode' => $strict,
-                'file_only' => $filesOnly,
-            ];
-            $files = $this->fm->listFiles('', $options);
-            
-            // Limit results
-            if (count($files) > $limit) {
-                $files = array_slice($files, 0, $limit);
-            }
-            
-            $this->jsonOk($files);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleRead(): void {
-        $path = $_GET['path'] ?? '';
-
-        try {
-            $content = $this->fm->readFile($path);
-            $this->jsonOk(['path' => $path, 'content' => $content]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleWrite(): void {
-        $body = $this->getBody();
-        $path = $body['path'] ?? '';
-        $content = $body['content'] ?? '';
-
-        try {
-            $this->fm->writeFile($path, $content);
-            $this->jsonOk(['ok' => true]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleBackups(): void {
-        try {
-            $backups = $this->fm->listBackups();
-            $this->jsonOk($backups);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleRestore(): void {
-        $body = $this->getBody();
-        $backupPath = $body['path'] ?? '';
-
-        try {
-            $restoredPath = $this->fm->restore($backupPath);
-            $this->jsonOk(['restored_to' => $restoredPath]);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
     private function handleUrlMap(): void {
         $url = $_GET['url'] ?? '';
 
         try {
             $candidates = $this->fm->urlToFile($url);
             $this->jsonOk($candidates);
-        } catch (\Throwable $e) {
-            $this->jsonError($e->getMessage(), 400);
-        }
-    }
-
-    private function handleConfigSave(): void {
-        $body = $this->getBody();
-
-        try {
-            if (!empty($body['provider'])) {
-                $this->config->setProvider($body['provider']);
-            }
-            if (!empty($body['api_key'])) {
-                $this->config->setApiKey($body['api_key']);
-            }
-            if (!empty($body['model'])) {
-                $this->config->setModel($body['model']);
-            }
-            if (!empty($body['site_url'])) {
-                $this->config->setSiteUrl($body['site_url']);
-            }
-            $this->config->save();
-            $this->jsonOk([]);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 400);
         }
@@ -2587,9 +2793,25 @@ const state = {
   isStreaming: false,       // true while SSE is open
 };
 
+// ── TAB DETECTION ─────────────────────────────────────────────────────────────
+function getCurrentTab() {
+  // First try URL hash
+  if (location.hash) {
+    return location.hash.slice(1);
+  }
+  // Fall back to visible tab
+  const visibleSection = document.querySelector('section[style*="display: block"]') ||
+                          document.querySelector('section');
+  if (visibleSection) {
+    return visibleSection.id.replace('tab-', '');
+  }
+  return 'chat'; // Default
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 async function apiPost(action, body) {
-  const response = await fetch(`?action=${action}`, {
+  const tab = getCurrentTab();
+  const response = await fetch(`?action=${action}&tab=${tab}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2604,7 +2826,8 @@ async function apiPost(action, body) {
 }
 
 async function apiGet(action, params = {}) {
-  const query = new URLSearchParams({ action, ...params }).toString();
+  const tab = getCurrentTab();
+  const query = new URLSearchParams({ action, tab, ...params }).toString();
   const response = await fetch(`?${query}`, {
     headers: {
       'X-Lutin-Token': state.csrfToken,
@@ -2766,7 +2989,7 @@ async function openChatStream(userText, loadingId) {
   let receivedAnyData = false;
   
   try {
-    const response = await fetch('?action=chat', {
+    const response = await fetch('?action=chat&tab=chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3280,7 +3503,7 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
   try {
     // Use the dedicated editor_chat endpoint
     // The server will handle current file context automatically
-    const response = await fetch('?action=editor_chat', {
+    const response = await fetch('?action=editor_chat&tab=editor', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -4619,6 +4842,11 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/agents/LutinEditorAgent.php';
+    // Page controllers
+    require_once __DIR__ . '/pages/AbstractLutinPage.php';
+    require_once __DIR__ . '/pages/LutinChatPage.php';
+    require_once __DIR__ . '/pages/LutinEditorPage.php';
+    require_once __DIR__ . '/pages/LutinConfigPage.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }
@@ -4634,7 +4862,6 @@ $auth->startSession();
 $fm    = new LutinFileManager($config);
 $view  = new LutinView($config, $auth);
 
-// Agent is initialized lazily by router when needed
-$router = new LutinRouter($config, $auth, $fm, null, $view);
+$router = new LutinRouter($config, $auth, $fm, $view);
 $router->dispatch();
 
