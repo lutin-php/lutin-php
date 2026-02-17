@@ -4,6 +4,24 @@ A self-hosted, single-file AI-powered website editor.
 
 Drop `lutin.php` into any web public directory and get an AI assistant that helps you build and edit your website through natural conversation. Remove `lutin.php` and the `lutin/` directory when you're done — your website remains 100% functional.
 
+## Quick Start
+
+* Download `lutin.php` from [here](https://raw.githubusercontent.com/lutin-php/lutin-php/refs/heads/main/dist/lutin.php)
+
+* Copy in your server web root directory (public/, or www/, etc...)
+
+* Go visit this new page `http://www.yoursite.com/lutin.php`
+
+On first run, you'll set up:
+- Admin password
+- AI provider (Anthropic/OpenAI) and API key
+- Project root directory (the AI can access all files here except `lutin/`)
+
+Then just chat with the AI to build your website:
+- *"Create a landing page with a hero section"*
+- *"Add a contact form"*
+- *"Update the header on all pages"*
+
 ## Philosophy
 
 - **Single file deployment**: One PHP file to rule them all
@@ -15,26 +33,6 @@ Drop `lutin.php` into any web public directory and get an AI assistant that help
 
 - PHP 8.1+ with `curl` extension
 - An API key from [Anthropic](https://www.anthropic.com) (Claude) or [OpenAI](https://openai.com) (GPT)
-
-## Quick Start
-
-```bash
-# Copy lutin.php to your web root
-cp lutin.php /var/www/html/  # or public/, www/, etc.
-
-# Go to lutin.php in your browser
-open http://localhost/lutin.php
-```
-
-On first run, you'll set up:
-- Admin password
-- AI provider (Anthropic/OpenAI) and API key
-- Project root directory (the AI can access all files here except `lutin/`)
-
-Then just chat with the AI to build your website:
-- *"Create a landing page with a hero section"*
-- *"Add a contact form"*
-- *"Update the header on all pages"*
 
 ## Development
 
