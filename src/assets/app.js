@@ -784,6 +784,14 @@ async function sendEditorAiRequest(prompt, currentFile, currentContent) {
             if (result.ok && result.path) {
               openFilePath = result.path;
             }
+          } else if (event.type === 'file_changed') {
+            // Refresh the file tree to show changes
+            initFileTree();
+            // If the changed file is currently open, refresh editor content
+            if (state.currentFile === event.path) {
+              await openFile(event.path);
+              showToast('File refreshed: ' + event.path, 'info');
+            }
           }
         } catch (e) {
           console.error('Failed to parse SSE event:', e, line);

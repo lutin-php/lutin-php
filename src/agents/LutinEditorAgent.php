@@ -17,6 +17,9 @@ class LutinEditorAgent extends AbstractLutinAgent {
     /** Content of the currently open file */
     private ?string $currentContent = null;
 
+    /** Reference to the editor page for triggering UI updates */
+    private ?LutinEditorPage $editorPage = null;
+
     /**
      * Sets the current file context for this agent instance.
      * This should be called before chat() to provide file context.
@@ -27,6 +30,16 @@ class LutinEditorAgent extends AbstractLutinAgent {
     public function setCurrentFile(?string $path, ?string $content): void {
         $this->currentFile = $path;
         $this->currentContent = $content;
+    }
+
+    /**
+     * Sets the editor page reference for triggering UI updates.
+     * This should be called immediately after constructing the agent.
+     *
+     * @param LutinEditorPage $page The editor page instance
+     */
+    public function setEditorPage(LutinEditorPage $page): void {
+        $this->editorPage = $page;
     }
 
     /**
@@ -100,13 +113,37 @@ class LutinEditorAgent extends AbstractLutinAgent {
 
     /**
      * Executes a tool call from the AI.
-     * Extends parent to handle open_file_in_editor tool.
+     * Extends parent to handle open_file_in_editor tool and trigger editor refresh on write_file.
      *
      * @param string $name The tool name
      * @param array $input The tool input parameters
      * @return string The result as a string (typically JSON-encoded)
      */
     protected function executeTool(string $name, array $input): string {
+        // Handle write_file: execute parent then trigger editor refresh
+        if ($name === 'write_file') {
+            $result = parent::executeTool($name, $input);
+            
+            // Notify the editor page to refresh if the write was successful
+            $resultData = json_decode($result, true);
+            if (isset($resultData['ok']) && $resultData['ok'] === true) {
+                $path = $input['path'] ?? '';
+                
+                if ($this->editorPage !== null) {
+                    $this->editorPage->onFileWritten($path);
+                }
+                
+                // Send SSE event to client to refresh the editor
+                $this->sseFlush([
+                    'type' => 'file_changed',
+                    'path' => $path,
+                ]);
+            }
+            
+            return $result;
+        }
+        
+        // Handle open_file_in_editor
         if ($name === 'open_file_in_editor') {
             $path = $input['path'] ?? '';
             if (empty($path)) {

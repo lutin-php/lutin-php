@@ -153,7 +153,20 @@ class LutinEditorPage extends AbstractLutinPage {
     private function getAgent(): LutinEditorAgent {
         if ($this->agent === null) {
             $this->agent = new LutinEditorAgent($this->config, $this->fm);
+            $this->agent->setEditorPage($this);
         }
         return $this->agent;
+    }
+
+    /**
+     * Called by the editor agent when a file is written.
+     * Can be used to trigger UI refresh or other side effects.
+     *
+     * @param string $path The path of the file that was written
+     */
+    public function onFileWritten(string $path): void {
+        // This method is called by LutinEditorAgent after a successful write_file
+        // Subclasses or future implementations can override this to trigger UI updates
+        // For now, this serves as a hook point for the agent-page communication
     }
 }
