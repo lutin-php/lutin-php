@@ -9,7 +9,11 @@ chdir(__DIR__ . '/..');
 require_once __DIR__ . '/../src/classes/LutinConfig.php';
 require_once __DIR__ . '/../src/classes/LutinAuth.php';
 require_once __DIR__ . '/../src/classes/LutinFileManager.php';
-require_once __DIR__ . '/../src/classes/LutinAgent.php';
+require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
+require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+require_once __DIR__ . '/../src/agents/LutinAgent.php';
+require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
 require_once __DIR__ . '/../src/classes/LutinView.php';
 require_once __DIR__ . '/../src/classes/LutinRouter.php';
 
@@ -43,8 +47,8 @@ $tests['LutinAgent::OpenAIAdapter (instantiation)'] = function() {
     assert_true($adapter instanceof LutinProviderAdapter, 'OpenAIAdapter should implement LutinProviderAdapter');
 };
 
-// Test: LutinAgent instantiation with Anthropic
-$tests['LutinAgent::instantiation (Anthropic)'] = function() use ($scratch) {
+// Test: LutinChatAgent instantiation with Anthropic
+$tests['LutinChatAgent::instantiation (Anthropic)'] = function() use ($scratch) {
     $projectRoot = $scratch . '/site1';
     $webRoot = $projectRoot;
     $lutinDir = $projectRoot . '/lutin';
@@ -58,12 +62,13 @@ $tests['LutinAgent::instantiation (Anthropic)'] = function() use ($scratch) {
     $config->save();
 
     $fm = new LutinFileManager($config);
-    $agent = new LutinAgent($config, $fm);
-    assert_true($agent instanceof LutinAgent, 'LutinAgent should instantiate');
+    $agent = new LutinChatAgent($config, $fm);
+    assert_true($agent instanceof LutinChatAgent, 'LutinChatAgent should instantiate');
+    assert_true($agent instanceof LutinAgent, 'LutinChatAgent should extend LutinAgent');
 };
 
-// Test: LutinAgent instantiation with OpenAI
-$tests['LutinAgent::instantiation (OpenAI)'] = function() use ($scratch) {
+// Test: LutinChatAgent instantiation with OpenAI
+$tests['LutinChatAgent::instantiation (OpenAI)'] = function() use ($scratch) {
     $projectRoot = $scratch . '/site2';
     $webRoot = $projectRoot;
     $lutinDir = $projectRoot . '/lutin';
@@ -77,12 +82,12 @@ $tests['LutinAgent::instantiation (OpenAI)'] = function() use ($scratch) {
     $config->save();
 
     $fm = new LutinFileManager($config);
-    $agent = new LutinAgent($config, $fm);
-    assert_true($agent instanceof LutinAgent, 'LutinAgent should instantiate with OpenAI');
+    $agent = new LutinChatAgent($config, $fm);
+    assert_true($agent instanceof LutinChatAgent, 'LutinChatAgent should instantiate with OpenAI');
 };
 
 // Test: Chat method exists
-$tests['LutinAgent::chat (method exists)'] = function() use ($scratch) {
+$tests['LutinChatAgent::chat (method exists)'] = function() use ($scratch) {
     $projectRoot = $scratch . '/site3';
     $webRoot = $projectRoot;
     $lutinDir = $projectRoot . '/lutin';
@@ -96,9 +101,9 @@ $tests['LutinAgent::chat (method exists)'] = function() use ($scratch) {
     $config->save();
 
     $fm = new LutinFileManager($config);
-    $agent = new LutinAgent($config, $fm);
+    $agent = new LutinChatAgent($config, $fm);
 
-    assert_true(method_exists($agent, 'chat'), 'LutinAgent should have chat method');
+    assert_true(method_exists($agent, 'chat'), 'LutinChatAgent should have chat method');
 };
 
 // Test: Router initializes with all dependencies

@@ -9,7 +9,7 @@ cd "$ROOT_DIR"
 echo "Linting source files..."
 errors=0
 
-for f in src/classes/*.php src/index.php scripts/build.php scripts/check.php scripts/test.php; do
+for f in src/classes/*.php src/agents/*.php src/agent_providers/*.php src/index.php scripts/build.php scripts/check.php scripts/test.php; do
     if [ -f "$f" ]; then
         if php -l "$f" > /dev/null 2>&1; then
             echo "  ✓ $f"

@@ -10,7 +10,13 @@ $classFiles = [
     'src/classes/LutinConfig.php',
     'src/classes/LutinAuth.php',
     'src/classes/LutinFileManager.php',
-    'src/classes/LutinAgent.php',
+    // Agent provider adapters
+    'src/agent_providers/LutinProviderAdapter.php',
+    'src/agent_providers/AnthropicAdapter.php',
+    'src/agent_providers/OpenAIAdapter.php',
+    // Agent classes
+    'src/agents/LutinAgent.php',
+    'src/agents/LutinChatAgent.php',
     'src/classes/LutinRouter.php',
     'src/classes/LutinView.php',
 ];

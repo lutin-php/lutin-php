@@ -2,7 +2,9 @@
 const state = {
   csrfToken: document.querySelector('meta[name="lutin-token"]')?.content ?? '',
   currentFile: null,        // relative path of open file
+  currentEditor: null,      // 'codemirror', 'tinymce', or 'prism'
   cmEditor: null,           // CodeMirror instance
+  tinymceEditor: null,      // TinyMCE instance
   chatHistory: [],          // [{role, content}] accumulated for context
   isStreaming: false,       // true while SSE is open
 };
@@ -370,24 +372,128 @@ function handleSseEvent(event, bubbleEl, setBubble, appendText) {
 // ── EDITOR ────────────────────────────────────────────────────────────────────
 function initEditor() {
   const cmContainer = document.getElementById('codemirror-container');
-  if (!cmContainer) return;
+  if (cmContainer) {
+    state.cmEditor = CodeMirror(cmContainer, {
+      lineNumbers: true,
+      theme: 'default',
+      mode: 'php',
+      indentUnit: 4,
+      tabSize: 4,
+      indentWithTabs: false,
+      lineWrapping: false,
+      value: '// Select a file to edit',
+    });
+  }
 
-  state.cmEditor = CodeMirror(cmContainer, {
-    lineNumbers: true,
-    theme: 'default',
-    mode: 'php',
-    indentUnit: 4,
-    tabSize: 4,
-    indentWithTabs: false,
-    lineWrapping: false,
-    value: '// Select a file to edit',
-  });
+  // Initialize TinyMCE config (will be applied when needed)
+  initJodit();
 
   const saveBtn = document.getElementById('save-btn');
   if (saveBtn) {
     saveBtn.addEventListener('click', saveFile);
   }
 }
+
+function initJodit() {
+  // Jodit will be initialized when needed
+  state.joditEditor = null;
+}
+
+function switchEditor(editorType) {
+  // Hide all editors
+  const cmContainer = document.getElementById('codemirror-container');
+  const tinymceContainer = document.getElementById('tinymce-container');
+  
+  if (cmContainer) cmContainer.style.display = 'none';
+  if (tinymceContainer) tinymceContainer.style.display = 'none';
+  
+  // Destroy Jodit instance when switching away from it to free memory
+  if (state.currentEditor === 'tinymce' && state.joditEditor && editorType !== 'tinymce') {
+    state.joditEditor.destruct();
+    state.joditEditor = null;
+  }
+  
+  state.currentEditor = editorType;
+  
+  // Show selected editor
+  if (editorType === 'tinymce') {
+    if (tinymceContainer) tinymceContainer.style.display = 'block';
+  } else {
+    if (cmContainer) cmContainer.style.display = 'block';
+    // Refresh CodeMirror when showing it (in case container was hidden)
+    if (state.cmEditor) {
+      state.cmEditor.refresh();
+    }
+  }
+}
+
+function getEditorContent() {
+  if (state.currentEditor === 'tinymce') {
+    return state.joditEditor ? state.joditEditor.value : '';
+  }
+  return state.cmEditor ? state.cmEditor.getValue() : '';
+}
+
+function setEditorContent(content, path) {
+  const ext = getFileExtension(path);
+  
+  if (isHtmlFile(ext)) {
+    // Use TinyMCE for HTML files
+    switchEditor('tinymce');
+    
+    if (state.joditEditor) {
+      state.joditEditor.value = content;
+    } else if (typeof Jodit !== 'undefined') {
+      // Recreate textarea if it was destroyed
+      const container = document.getElementById('tinymce-container');
+      if (container && !document.getElementById('tinymce-editor')) {
+        container.innerHTML = '<textarea id="tinymce-editor"></textarea>';
+      }
+      
+      // Jodit not initialized yet, init now
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      state.joditEditor = Jodit.make('#tinymce-editor', {
+        iframe: true,
+        height: '100%',
+        theme: isDark ? 'dark' : 'default',
+        toolbar: true,
+        buttons: [
+          'source', '|',
+          'bold', 'italic', 'underline', 'strikethrough', '|',
+          'ul', 'ol', '|',
+          'font', 'fontsize', 'brush', 'paragraph', '|',
+          'image', 'link', 'table', '|',
+          'align', 'undo', 'redo', '|',
+          'hr', 'eraser', 'copyformat', '|',
+          'symbol', 'fullsize'
+        ],
+      });
+      state.joditEditor.value = content;
+    }
+  } else {
+    // Use CodeMirror for all other files (PHP, JS, CSS, TXT, MD, etc.)
+    switchEditor('codemirror');
+    const mode = detectMode(path);
+    // Clear before setting mode to avoid tokenization errors
+    state.cmEditor.setValue('');
+    state.cmEditor.setOption('mode', mode);
+    // Use a small timeout to ensure mode is ready
+    requestAnimationFrame(() => {
+      state.cmEditor.setValue(content);
+    });
+  }
+}
+
+function getFileExtension(path) {
+  const match = path.match(/\.([^/.]+)$/);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function isHtmlFile(ext) {
+  return ['html', 'htm'].includes(ext);
+}
+
+
 
 async function openFile(path) {
   try {
@@ -398,15 +504,37 @@ async function openFile(path) {
     }
 
     state.currentFile = path;
-    const mode = detectMode(path);
-    state.cmEditor.setOption('mode', mode);
-    state.cmEditor.setValue(result.data.content);
+    
+    // Set content in appropriate editor
+    setEditorContent(result.data.content, path);
 
-    document.getElementById('editor-filename').textContent = path;
-    document.getElementById('save-btn').disabled = false;
+    const filenameInput = document.getElementById('editor-filename');
+    if (filenameInput) filenameInput.value = path;
+    
+    const saveBtn = document.getElementById('save-btn');
+    if (saveBtn) saveBtn.disabled = false;
+    
+    // Update AI helper context
+    updateEditorAiContext(path);
+    
+    // Clear any autocomplete
+    hideFilenameAutocomplete();
   } catch (error) {
     showToast('Error: ' + error.message, 'error');
   }
+}
+
+async function openFileFromInput() {
+  const filenameInput = document.getElementById('editor-filename');
+  if (!filenameInput) return;
+  
+  const path = filenameInput.value.trim();
+  if (!path) {
+    showToast('Please enter a file path', 'warning');
+    return;
+  }
+  
+  await openFile(path);
 }
 
 async function saveFile() {
@@ -416,9 +544,10 @@ async function saveFile() {
   }
 
   try {
+    const content = getEditorContent();
     const result = await apiPost('write', {
       path: state.currentFile,
-      content: state.cmEditor.getValue(),
+      content: content,
     });
 
     if (result.ok) {
@@ -436,27 +565,41 @@ function detectMode(path) {
   if (path.endsWith('.js')) return 'javascript';
   if (path.endsWith('.css')) return 'css';
   if (path.endsWith('.html') || path.endsWith('.htm')) return 'htmlmixed';
-  return 'null';
+  if (path.endsWith('.json')) return 'application/json';
+  if (path.endsWith('.xml')) return 'xml';
+  if (path.endsWith('.sql')) return 'sql';
+  if (path.endsWith('.md')) return 'markdown';
+  if (path.endsWith('.txt')) return 'text';
+  return 'text';
 }
 
 // ── FILE TREE ─────────────────────────────────────────────────────────────────
 function initFileTree() {
-  const fileList = document.getElementById('file-list');
-  if (!fileList) return;
+  const fileTreeRoot = document.getElementById('file-tree-root');
+  if (!fileTreeRoot) return;
 
-  loadDir('', fileList);
+  loadDir('', fileTreeRoot);
 }
 
 async function loadDir(path, containerEl) {
   try {
     const result = await apiGet('list', { path });
     if (!result.ok) {
-      showToast('Error: ' + result.error, 'error');
+      showToast('Error loading files: ' + result.error, 'error');
       return;
     }
 
     containerEl.innerHTML = '';
-    for (const entry of result.data) {
+    
+    // Sort entries: directories first, then files alphabetically
+    const sortedEntries = result.data.sort((a, b) => {
+      if (a.type === b.type) {
+        return a.name.localeCompare(b.name);
+      }
+      return a.type === 'dir' ? -1 : 1;
+    });
+    
+    for (const entry of sortedEntries) {
       renderFileEntry(entry, containerEl);
     }
   } catch (error) {
@@ -466,39 +609,386 @@ async function loadDir(path, containerEl) {
 
 function renderFileEntry(entry, containerEl) {
   const div = document.createElement('div');
-  div.style.paddingLeft = '1rem';
+  div.className = 'file-entry-wrapper';
 
   if (entry.type === 'dir') {
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = '📁 ' + entry.name;
-    summary.style.cursor = 'pointer';
-    const subDir = document.createElement('div');
-
-    details.appendChild(summary);
-    details.appendChild(subDir);
-
-    details.addEventListener('toggle', async () => {
-      if (details.open && subDir.children.length === 0) {
-        await loadDir(entry.path, subDir);
+    // Directory with expandable children
+    const dirEntry = document.createElement('div');
+    dirEntry.className = 'file-entry dir';
+    dirEntry.dataset.path = entry.path;
+    dirEntry.innerHTML = `<span class="icon">📁</span><span class="name">${escapeHtml(entry.name)}</span>`;
+    
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'file-children';
+    childrenContainer.style.display = 'none';
+    
+    let loaded = false;
+    dirEntry.addEventListener('click', async () => {
+      const isExpanded = childrenContainer.style.display !== 'none';
+      
+      if (isExpanded) {
+        // Collapse
+        childrenContainer.style.display = 'none';
+        dirEntry.querySelector('.icon').textContent = '📁';
+      } else {
+        // Expand
+        childrenContainer.style.display = 'block';
+        dirEntry.querySelector('.icon').textContent = '📂';
+        
+        if (!loaded) {
+          await loadDir(entry.path, childrenContainer);
+          loaded = true;
+        }
       }
     });
-
-    div.appendChild(details);
+    
+    div.appendChild(dirEntry);
+    div.appendChild(childrenContainer);
   } else {
-    const link = document.createElement('a');
-    link.href = '#';
-    link.textContent = '📄 ' + entry.name;
-    link.style.display = 'block';
-    link.style.cursor = 'pointer';
-    link.onclick = (e) => {
-      e.preventDefault();
+    // File entry
+    const fileEntry = document.createElement('div');
+    fileEntry.className = 'file-entry file';
+    fileEntry.dataset.path = entry.path;
+    fileEntry.innerHTML = `<span class="icon">📄</span><span class="name">${escapeHtml(entry.name)}</span>`;
+    fileEntry.addEventListener('click', () => {
+      // Remove active class from all entries
+      document.querySelectorAll('#tab-editor .file-entry').forEach(el => el.classList.remove('active'));
+      // Add active class to this entry
+      fileEntry.classList.add('active');
       openFile(entry.path);
-    };
-    div.appendChild(link);
+    });
+    div.appendChild(fileEntry);
   }
 
   containerEl.appendChild(div);
+}
+
+// ── EDITOR AI HELPER ──────────────────────────────────────────────────────────
+function initEditorAiHelper() {
+  const aiSubmitBtn = document.getElementById('editor-ai-submit');
+  const aiPromptInput = document.getElementById('editor-ai-prompt');
+  
+  if (!aiSubmitBtn || !aiPromptInput) return;
+  
+  aiSubmitBtn.addEventListener('click', async () => {
+    const prompt = aiPromptInput.value.trim();
+    if (!prompt) {
+      showToast('Please enter a prompt', 'warning');
+      return;
+    }
+    
+    // Get current file content if available
+    const currentFile = state.currentFile;
+    const currentContent = getEditorContent();
+    
+    await sendEditorAiRequest(prompt, currentFile, currentContent);
+  });
+  
+  // Allow Ctrl+Enter to submit
+  aiPromptInput.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      aiSubmitBtn.click();
+    }
+  });
+}
+
+async function sendEditorAiRequest(prompt, currentFile, currentContent) {
+  const responseContainer = document.getElementById('editor-ai-response');
+  if (!responseContainer) return;
+  
+  responseContainer.classList.add('loading');
+  responseContainer.textContent = '';
+  
+  try {
+    // Build context message with file info
+    let contextMessage = prompt;
+    if (currentFile) {
+      contextMessage = `I'm working on file "${currentFile}". Here's the current content:\n\n\`\`\`\n${currentContent}\n\`\`\`\n\nMy question: ${prompt}`;
+    }
+    
+    const response = await fetch('?action=chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lutin-Token': state.csrfToken,
+      },
+      body: JSON.stringify({
+        message: contextMessage,
+        history: state.chatHistory,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMsg = 'Error sending message';
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMsg = errorJson.error || errorMsg;
+      } catch {}
+      responseContainer.classList.remove('loading');
+      responseContainer.textContent = '❌ Error: ' + errorMsg;
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    responseContainer.classList.remove('loading');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(jsonStr);
+          
+          if (event.type === 'text') {
+            fullResponse += event.delta;
+            responseContainer.textContent = fullResponse;
+            responseContainer.scrollTop = responseContainer.scrollHeight;
+          } else if (event.type === 'error') {
+            responseContainer.textContent = '❌ Error: ' + event.message;
+          } else if (event.type === 'tool_start') {
+            responseContainer.textContent = fullResponse + '\n[Using tool: ' + event.name + '...]';
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e, line);
+        }
+      }
+    }
+
+    // Add to chat history
+    if (fullResponse) {
+      state.chatHistory.push({ role: 'user', content: prompt });
+      state.chatHistory.push({ role: 'assistant', content: fullResponse });
+    }
+    
+  } catch (error) {
+    responseContainer.classList.remove('loading');
+    responseContainer.textContent = '❌ Error: ' + error.message;
+  }
+}
+
+function updateEditorAiContext(filename) {
+  const contextInfo = document.getElementById('ai-context-file');
+  if (contextInfo) {
+    contextInfo.textContent = filename ? `Context: ${filename}` : 'No file context';
+  }
+}
+
+// ── FILENAME AUTOCOMPLETE ────────────────────────────────────────────────────
+let filenameAutocompleteDebounce = null;
+let filenameAutocompleteSelected = -1;
+
+function initFilenameAutocomplete() {
+  const filenameInput = document.getElementById('editor-filename');
+  const dropdown = document.getElementById('filename-autocomplete');
+  
+  if (!filenameInput || !dropdown) return;
+  
+  // Input event for search
+  filenameInput.addEventListener('input', () => {
+    const query = filenameInput.value.trim();
+    
+    // Clear previous debounce
+    if (filenameAutocompleteDebounce) {
+      clearTimeout(filenameAutocompleteDebounce);
+    }
+    
+    if (query.length < 1) {
+      hideFilenameAutocomplete();
+      return;
+    }
+    
+    // Debounce search
+    filenameAutocompleteDebounce = setTimeout(() => {
+      searchFiles(query);
+    }, 150);
+  });
+  
+  // Keyboard navigation
+  filenameInput.addEventListener('keydown', (e) => {
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        if (items.length > 0) {
+          filenameAutocompleteSelected = Math.min(
+            filenameAutocompleteSelected + 1, 
+            items.length - 1
+          );
+          updateAutocompleteSelection(items);
+        }
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        if (items.length > 0) {
+          filenameAutocompleteSelected = Math.max(
+            filenameAutocompleteSelected - 1, 
+            -1
+          );
+          updateAutocompleteSelection(items);
+        }
+        break;
+      case 'Enter':
+        e.preventDefault();
+        if (filenameAutocompleteSelected >= 0 && items[filenameAutocompleteSelected]) {
+          selectAutocompleteItem(items[filenameAutocompleteSelected]);
+        } else {
+          openFileFromInput();
+        }
+        break;
+      case 'Escape':
+        hideFilenameAutocomplete();
+        break;
+    }
+  });
+  
+  // Focus out to hide dropdown (with delay to allow clicking items)
+  filenameInput.addEventListener('blur', () => {
+    setTimeout(() => hideFilenameAutocomplete(), 200);
+  });
+  
+  // Focus to show dropdown if has value
+  filenameInput.addEventListener('focus', () => {
+    const query = filenameInput.value.trim();
+    if (query.length >= 1) {
+      searchFiles(query);
+    }
+  });
+}
+
+async function searchFiles(query) {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (!dropdown) return;
+  
+  try {
+    const result = await apiGet('search', { 
+      q: query,
+      strict: 'false',
+      files_only: 'true',
+      limit: '20'
+    });
+    
+    if (!result.ok) {
+      hideFilenameAutocomplete();
+      return;
+    }
+    
+    renderAutocompleteResults(result.data);
+  } catch (error) {
+    hideFilenameAutocomplete();
+  }
+}
+
+function renderAutocompleteResults(files) {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (!dropdown) return;
+  
+  dropdown.innerHTML = '';
+  filenameAutocompleteSelected = -1;
+  
+  if (files.length === 0) {
+    dropdown.innerHTML = '<div class="autocomplete-no-results">No files found</div>';
+    dropdown.classList.add('active');
+    return;
+  }
+  
+  // Sort by relevance (exact matches first, then by path length)
+  const query = document.getElementById('editor-filename')?.value?.toLowerCase() || '';
+  files.sort((a, b) => {
+    const aPath = a.path.toLowerCase();
+    const bPath = b.path.toLowerCase();
+    
+    // Exact match bonus
+    if (aPath === query) return -1;
+    if (bPath === query) return 1;
+    
+    // Starts with bonus
+    if (aPath.startsWith(query) && !bPath.startsWith(query)) return -1;
+    if (bPath.startsWith(query) && !aPath.startsWith(query)) return 1;
+    
+    // Shorter paths first
+    return aPath.length - bPath.length;
+  });
+  
+  files.forEach((file, index) => {
+    const item = document.createElement('div');
+    item.className = 'autocomplete-item';
+    item.dataset.path = file.path;
+    item.dataset.index = index;
+    
+    const icon = file.type === 'dir' ? '📁' : getFileIcon(file.path);
+    
+    item.innerHTML = `
+      <span class="icon">${icon}</span>
+      <span class="name">${escapeHtml(file.name)}</span>
+      <span class="path">${escapeHtml(file.path)}</span>
+    `;
+    
+    item.addEventListener('click', () => selectAutocompleteItem(item));
+    item.addEventListener('mouseenter', () => {
+      filenameAutocompleteSelected = index;
+      updateAutocompleteSelection(dropdown.querySelectorAll('.autocomplete-item'));
+    });
+    
+    dropdown.appendChild(item);
+  });
+  
+  dropdown.classList.add('active');
+}
+
+function getFileIcon(path) {
+  if (path.endsWith('.php')) return '🐘';
+  if (path.endsWith('.js')) return '📜';
+  if (path.endsWith('.css')) return '🎨';
+  if (path.endsWith('.html') || path.endsWith('.htm')) return '🌐';
+  if (path.endsWith('.json')) return '📋';
+  if (path.endsWith('.md')) return '📝';
+  if (path.endsWith('.sql')) return '🗄️';
+  return '📄';
+}
+
+function updateAutocompleteSelection(items) {
+  items.forEach((item, index) => {
+    if (index === filenameAutocompleteSelected) {
+      item.classList.add('selected');
+      item.scrollIntoView({ block: 'nearest' });
+    } else {
+      item.classList.remove('selected');
+    }
+  });
+}
+
+function selectAutocompleteItem(item) {
+  const path = item.dataset.path;
+  const filenameInput = document.getElementById('editor-filename');
+  if (filenameInput) {
+    filenameInput.value = path;
+  }
+  hideFilenameAutocomplete();
+  openFile(path);
+}
+
+function hideFilenameAutocomplete() {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (dropdown) {
+    dropdown.classList.remove('active');
+    dropdown.innerHTML = '';
+  }
+  filenameAutocompleteSelected = -1;
 }
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -628,7 +1118,7 @@ async function viewBackup(backupPath) {
   try {
     const result = await apiGet('read', { path: backupPath });
     if (result.ok) {
-      state.cmEditor.setValue(result.data.content);
+      setEditorContent(result.data.content, backupPath);
       document.getElementById('editor-filename').textContent = backupPath + ' (backup)';
     } else {
       showToast('Error: ' + result.error, 'error');
@@ -869,6 +1359,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initChat();
   initEditor();
   initFileTree();
+  initFilenameAutocomplete();
+  initEditorAiHelper();
   initConfig();
   initUrlLookup();
   initTemplates();

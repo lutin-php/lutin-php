@@ -14,7 +14,13 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/classes/LutinConfig.php';
     require_once __DIR__ . '/classes/LutinAuth.php';
     require_once __DIR__ . '/classes/LutinFileManager.php';
-    require_once __DIR__ . '/classes/LutinAgent.php';
+    // Agent provider adapters
+    require_once __DIR__ . '/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
+    require_once __DIR__ . '/agent_providers/OpenAIAdapter.php';
+    // Agent classes
+    require_once __DIR__ . '/agents/LutinAgent.php';
+    require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }

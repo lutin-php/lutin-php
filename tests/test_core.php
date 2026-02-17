@@ -159,7 +159,11 @@ $tests['LutinFileManager::urlToFile (basic heuristics)'] = function() use ($scra
 
 // Test: LutinAgent — AGENTS.md from lutin directory is included in system prompt
 $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scratch) {
-    require_once __DIR__ . '/../src/classes/LutinAgent.php';
+    require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+    require_once __DIR__ . '/../src/agents/LutinAgent.php';
+    require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
     $projectRoot = $scratch . '/site7';
     $webRoot = $projectRoot;
@@ -176,7 +180,7 @@ $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scra
     $cfg->setApiKey('sk-test');
     
     $fm = new LutinFileManager($cfg);
-    $agent = new LutinAgent($cfg, $fm);
+    $agent = new LutinChatAgent($cfg, $fm);
     
     // Use reflection to test the private method
     $reflection = new ReflectionClass($agent);
@@ -191,7 +195,11 @@ $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scra
 
 // Test: LutinAgent — buildSystemPrompt works without AGENTS.md
 $tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($scratch) {
-    require_once __DIR__ . '/../src/classes/LutinAgent.php';
+    require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+    require_once __DIR__ . '/../src/agents/LutinAgent.php';
+    require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
     $projectRoot = $scratch . '/site8';
     $webRoot = $projectRoot;
@@ -206,7 +214,7 @@ $tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($s
     $cfg->setApiKey('sk-test');
     
     $fm = new LutinFileManager($cfg);
-    $agent = new LutinAgent($cfg, $fm);
+    $agent = new LutinChatAgent($cfg, $fm);
     
     $reflection = new ReflectionClass($agent);
     $method = $reflection->getMethod('buildSystemPrompt');

@@ -32,9 +32,15 @@ lutin/
 │   │   ├── LutinConfig.php     # Config management + project root handling
 │   │   ├── LutinAuth.php
 │   │   ├── LutinFileManager.php # Project root + lutin dir file operations
-│   │   ├── LutinAgent.php
 │   │   ├── LutinRouter.php
 │   │   └── LutinView.php
+│   ├── agents/                 # AI Agent classes
+│   │   ├── LutinAgent.php      # Base Agent class (abstract)
+│   │   └── LutinChatAgent.php  # Chat Agent with file tools
+│   ├── agent_providers/        # AI Provider adapters
+│   │   ├── LutinProviderAdapter.php  # Interface
+│   │   ├── AnthropicAdapter.php      # Anthropic (Claude) adapter
+│   │   └── OpenAIAdapter.php         # OpenAI (GPT) adapter
 │   ├── views/                  # HTML view partials
 │   │   ├── layout.php          # Outer HTML shell (head, tabs, script tags)
 │   │   ├── setup_wizard.php    # First-run setup form (includes project root config)
@@ -165,7 +171,8 @@ and writes a single self-contained `dist/lutin.php`.
 
 ## AI Provider Abstraction
 
-`LutinAgent` communicates with a single provider configured globally in the lutin directory's `config.json`.
+Provider adapters are in `src/agent_providers/` and implement the `LutinProviderAdapter` interface.
+`LutinAgent` (base class) communicates with a single provider configured globally in the lutin directory's `config.json`.
 Supported providers in v1: **Anthropic** (Claude) and **OpenAI** (GPT).
 The provider adapter is selected at runtime based on `config.provider` — no code changes needed to switch.
 
@@ -177,6 +184,22 @@ Available AI tools (PHP-side functions the agent can invoke):
 - `list_files(path)` — returns directory listing.
 - `read_file(path)` — returns file content.
 - `write_file(path, content)` — writes/creates a file (triggers backup).
+
+## Agent Architecture
+
+The base `LutinAgent` class (abstract, in `src/agents/LutinAgent.php`) provides:
+- Provider adapter management and API communication
+- The agentic loop (`runLoop()`) for multi-turn tool interactions
+- SSE output handling (`sseFlush()`)
+- System prompt building (with optional AGENTS.md injection)
+
+Subclasses must implement:
+- `buildToolDefinitions()` — Returns the tool schema for the AI provider
+- `executeTool()` — Dispatches tool calls to appropriate handlers
+
+Current agent implementations:
+- `LutinChatAgent` — File management tools (list_files, read_file, write_file)
+- Future: `LutinEditorAgent` — For inline editor assistance
 
 ---
 

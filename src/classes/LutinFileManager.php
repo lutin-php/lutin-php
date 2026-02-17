@@ -122,8 +122,24 @@ class LutinFileManager {
      * Returns array of ['name' => string, 'type' => 'file'|'dir', 'path' => string (relative)]
      * Skips lutin.php and the lutin directory.
      * $path defaults to '' (project root).
+     * 
+     * Options:
+     *   - recursive (bool): List files recursively. Default: false
+     *   - search_pattern (string): Filter by name pattern. Default: null
+     *   - strict_mode (bool): If false, case-insensitive partial match. Default: true
+     *   - file_only (bool): Return only files. Default: false
      */
-    public function listFiles(string $path = ''): array {
+    public function listFiles(string $path = '', array $options = []): array {
+        $recursive = $options['recursive'] ?? false;
+        $searchPattern = $options['search_pattern'] ?? null;
+        $strictMode = $options['strict_mode'] ?? true;
+        $fileOnly = $options['file_only'] ?? false;
+
+        // If searching recursively or with pattern, use the recursive search
+        if ($recursive || $searchPattern !== null) {
+            return $this->listFilesRecursive($path, $searchPattern, $strictMode, $fileOnly);
+        }
+
         $dirPath = $path === '' ? $this->config->getProjectRoot() : $this->safePath($path);
 
         if (!is_dir($dirPath)) {
@@ -155,6 +171,11 @@ class LutinFileManager {
             $fullPath = $dirPath . '/' . $item;
             $isDir = is_dir($fullPath);
 
+            // Skip directories if file_only is true
+            if ($fileOnly && $isDir) {
+                continue;
+            }
+
             $entries[] = [
                 'name' => $item,
                 'type' => $isDir ? 'dir' : 'file',
@@ -163,6 +184,136 @@ class LutinFileManager {
         }
 
         return $entries;
+    }
+
+    /**
+     * Recursively list all files, optionally filtering by search pattern.
+     */
+    private function listFilesRecursive(
+        string $path, 
+        ?string $searchPattern, 
+        bool $strictMode,
+        bool $fileOnly
+    ): array {
+        $results = [];
+        $basePath = $path === '' ? $this->config->getProjectRoot() : $this->safePath($path);
+        
+        if (!is_dir($basePath)) {
+            return $results;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($basePath, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+
+        foreach ($iterator as $fileInfo) {
+            $fullPath = $fileInfo->getPathname();
+            $relPath = substr($fullPath, strlen($this->config->getProjectRoot()) + 1);
+            
+            // Skip lutin.php
+            if (basename($relPath) === 'lutin.php') {
+                continue;
+            }
+            
+            // Skip lutin directory
+            if ($this->isLutinDirPath($relPath)) {
+                continue;
+            }
+
+            $isDir = $fileInfo->isDir();
+
+            // Skip directories if file_only is true
+            if ($fileOnly && $isDir) {
+                continue;
+            }
+
+            // Apply search pattern filter
+            if ($searchPattern !== null) {
+                if (!$this->matchesPattern($relPath, $searchPattern, $strictMode)) {
+                    continue;
+                }
+            }
+
+            $results[] = [
+                'name' => $fileInfo->getFilename(),
+                'type' => $isDir ? 'dir' : 'file',
+                'path' => $relPath,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
+     * Check if a path matches the search pattern.
+     */
+    private function matchesPattern(string $path, string $pattern, bool $strictMode): bool {
+        $lowerPath = strtolower($path);
+        $lowerPattern = strtolower($pattern);
+        
+        if ($strictMode) {
+            // Strict mode: exact match, starts with, or contains substring
+            if ($path === $pattern) {
+                return true;
+            }
+            if (str_starts_with($path, $pattern)) {
+                return true;
+            }
+            // Also check substring (case-sensitive first)
+            if (str_contains($path, $pattern)) {
+                return true;
+            }
+            // Case-insensitive substring
+            if (str_contains($lowerPath, $lowerPattern)) {
+                return true;
+            }
+            return false;
+        }
+        
+        // Non-strict mode: more permissive matching
+        
+        // Direct substring match (case-insensitive)
+        if (str_contains($lowerPath, $lowerPattern)) {
+            return true;
+        }
+        
+        // Split pattern by common separators and check if all parts are in path
+        $patternParts = preg_split('/[\s\-_\.\/]/', $lowerPattern, -1, PREG_SPLIT_NO_EMPTY);
+        if (count($patternParts) > 1) {
+            $allPartsFound = true;
+            foreach ($patternParts as $part) {
+                if (strlen($part) > 1 && !str_contains($lowerPath, $part)) {
+                    $allPartsFound = false;
+                    break;
+                }
+            }
+            if ($allPartsFound) {
+                return true;
+            }
+        }
+        
+        // Fuzzy match: check if characters appear in order
+        return $this->fuzzyMatch($lowerPath, $lowerPattern);
+    }
+
+    /**
+     * Fuzzy string matching - checks if pattern characters appear in order in text.
+     */
+    private function fuzzyMatch(string $text, string $pattern): bool {
+        $textLen = strlen($text);
+        $patternLen = strlen($pattern);
+        $textIdx = 0;
+        $patternIdx = 0;
+
+        while ($textIdx < $textLen && $patternIdx < $patternLen) {
+            if ($text[$textIdx] === $pattern[$patternIdx]) {
+                $patternIdx++;
+            }
+            $textIdx++;
+        }
+
+        return $patternIdx === $patternLen;
     }
 
     /**

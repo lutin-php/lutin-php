@@ -5,14 +5,14 @@ class LutinRouter {
     private LutinConfig $config;
     private LutinAuth $auth;
     private LutinFileManager $fm;
-    private ?LutinAgent $agent;
+    private ?LutinChatAgent $agent;
     private LutinView $view;
 
     public function __construct(
         LutinConfig $config,
         LutinAuth $auth,
         LutinFileManager $fm,
-        ?LutinAgent $agent,
+        ?LutinChatAgent $agent,
         LutinView $view
     ) {
         $this->config = $config;
@@ -25,9 +25,9 @@ class LutinRouter {
     /**
      * Lazily initialize the agent when needed.
      */
-    private function getAgent(): LutinAgent {
+    private function getAgent(): LutinChatAgent {
         if ($this->agent === null) {
-            $this->agent = new LutinAgent($this->config, $this->fm);
+            $this->agent = new LutinChatAgent($this->config, $this->fm);
         }
         return $this->agent;
     }
@@ -58,6 +58,9 @@ class LutinRouter {
             } elseif ($method === 'GET' && $action === 'list') {
                 $this->requireAuth();
                 $this->handleList();
+            } elseif ($method === 'GET' && $action === 'search') {
+                $this->requireAuth();
+                $this->handleSearch();
             } elseif ($method === 'GET' && $action === 'read') {
                 $this->requireAuth();
                 $this->handleRead();
@@ -193,6 +196,37 @@ class LutinRouter {
 
         try {
             $files = $this->fm->listFiles($path);
+            $this->jsonOk($files);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleSearch(): void {
+        $query = $_GET['q'] ?? '';
+        $strict = ($_GET['strict'] ?? 'false') === 'true';
+        $filesOnly = ($_GET['files_only'] ?? 'true') === 'true';
+        $limit = min((int)($_GET['limit'] ?? 20), 100);
+
+        if (empty($query)) {
+            $this->jsonOk([]);
+            return;
+        }
+
+        try {
+            $options = [
+                'recursive' => true,
+                'search_pattern' => $query,
+                'strict_mode' => $strict,
+                'file_only' => $filesOnly,
+            ];
+            $files = $this->fm->listFiles('', $options);
+            
+            // Limit results
+            if (count($files) > $limit) {
+                $files = array_slice($files, 0, $limit);
+            }
+            
             $this->jsonOk($files);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 400);

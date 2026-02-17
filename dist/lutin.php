@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-02-16 23:33:57
+// Built: 2026-02-17 09:46:43
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -425,8 +425,24 @@ class LutinFileManager {
      * Returns array of ['name' => string, 'type' => 'file'|'dir', 'path' => string (relative)]
      * Skips lutin.php and the lutin directory.
      * $path defaults to '' (project root).
+     * 
+     * Options:
+     *   - recursive (bool): List files recursively. Default: false
+     *   - search_pattern (string): Filter by name pattern. Default: null
+     *   - strict_mode (bool): If false, case-insensitive partial match. Default: true
+     *   - file_only (bool): Return only files. Default: false
      */
-    public function listFiles(string $path = ''): array {
+    public function listFiles(string $path = '', array $options = []): array {
+        $recursive = $options['recursive'] ?? false;
+        $searchPattern = $options['search_pattern'] ?? null;
+        $strictMode = $options['strict_mode'] ?? true;
+        $fileOnly = $options['file_only'] ?? false;
+
+        // If searching recursively or with pattern, use the recursive search
+        if ($recursive || $searchPattern !== null) {
+            return $this->listFilesRecursive($path, $searchPattern, $strictMode, $fileOnly);
+        }
+
         $dirPath = $path === '' ? $this->config->getProjectRoot() : $this->safePath($path);
 
         if (!is_dir($dirPath)) {
@@ -458,6 +474,11 @@ class LutinFileManager {
             $fullPath = $dirPath . '/' . $item;
             $isDir = is_dir($fullPath);
 
+            // Skip directories if file_only is true
+            if ($fileOnly && $isDir) {
+                continue;
+            }
+
             $entries[] = [
                 'name' => $item,
                 'type' => $isDir ? 'dir' : 'file',
@@ -466,6 +487,136 @@ class LutinFileManager {
         }
 
         return $entries;
+    }
+
+    /**
+     * Recursively list all files, optionally filtering by search pattern.
+     */
+    private function listFilesRecursive(
+        string $path, 
+        ?string $searchPattern, 
+        bool $strictMode,
+        bool $fileOnly
+    ): array {
+        $results = [];
+        $basePath = $path === '' ? $this->config->getProjectRoot() : $this->safePath($path);
+        
+        if (!is_dir($basePath)) {
+            return $results;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($basePath, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+
+        foreach ($iterator as $fileInfo) {
+            $fullPath = $fileInfo->getPathname();
+            $relPath = substr($fullPath, strlen($this->config->getProjectRoot()) + 1);
+            
+            // Skip lutin.php
+            if (basename($relPath) === 'lutin.php') {
+                continue;
+            }
+            
+            // Skip lutin directory
+            if ($this->isLutinDirPath($relPath)) {
+                continue;
+            }
+
+            $isDir = $fileInfo->isDir();
+
+            // Skip directories if file_only is true
+            if ($fileOnly && $isDir) {
+                continue;
+            }
+
+            // Apply search pattern filter
+            if ($searchPattern !== null) {
+                if (!$this->matchesPattern($relPath, $searchPattern, $strictMode)) {
+                    continue;
+                }
+            }
+
+            $results[] = [
+                'name' => $fileInfo->getFilename(),
+                'type' => $isDir ? 'dir' : 'file',
+                'path' => $relPath,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
+     * Check if a path matches the search pattern.
+     */
+    private function matchesPattern(string $path, string $pattern, bool $strictMode): bool {
+        $lowerPath = strtolower($path);
+        $lowerPattern = strtolower($pattern);
+        
+        if ($strictMode) {
+            // Strict mode: exact match, starts with, or contains substring
+            if ($path === $pattern) {
+                return true;
+            }
+            if (str_starts_with($path, $pattern)) {
+                return true;
+            }
+            // Also check substring (case-sensitive first)
+            if (str_contains($path, $pattern)) {
+                return true;
+            }
+            // Case-insensitive substring
+            if (str_contains($lowerPath, $lowerPattern)) {
+                return true;
+            }
+            return false;
+        }
+        
+        // Non-strict mode: more permissive matching
+        
+        // Direct substring match (case-insensitive)
+        if (str_contains($lowerPath, $lowerPattern)) {
+            return true;
+        }
+        
+        // Split pattern by common separators and check if all parts are in path
+        $patternParts = preg_split('/[\s\-_\.\/]/', $lowerPattern, -1, PREG_SPLIT_NO_EMPTY);
+        if (count($patternParts) > 1) {
+            $allPartsFound = true;
+            foreach ($patternParts as $part) {
+                if (strlen($part) > 1 && !str_contains($lowerPath, $part)) {
+                    $allPartsFound = false;
+                    break;
+                }
+            }
+            if ($allPartsFound) {
+                return true;
+            }
+        }
+        
+        // Fuzzy match: check if characters appear in order
+        return $this->fuzzyMatch($lowerPath, $lowerPattern);
+    }
+
+    /**
+     * Fuzzy string matching - checks if pattern characters appear in order in text.
+     */
+    private function fuzzyMatch(string $text, string $pattern): bool {
+        $textLen = strlen($text);
+        $patternLen = strlen($pattern);
+        $textIdx = 0;
+        $patternIdx = 0;
+
+        while ($textIdx < $textLen && $patternIdx < $patternLen) {
+            if ($text[$textIdx] === $pattern[$patternIdx]) {
+                $patternIdx++;
+            }
+            $textIdx++;
+        }
+
+        return $patternIdx === $patternLen;
     }
 
     /**
@@ -1010,7 +1161,11 @@ class LutinFileManager {
     }
 }
 
-// ── LutinAgent.php ─────
+// ── LutinProviderAdapter.php ─────
+/**
+ * Interface for AI provider adapters.
+ * Each adapter must implement the stream() method to communicate with a specific AI provider.
+ */
 interface LutinProviderAdapter {
     /**
      * Sends a request to the AI API.
@@ -1020,11 +1175,19 @@ interface LutinProviderAdapter {
      *   - A tool call:    "data: " . json_encode(['type'=>'tool_call','name'=>'...','input'=>[...],'id'=>'...']) . "\n\n"
      *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
      * 
-     * @param string $systemPrompt The system prompt to use (combines base prompt + AGENTS.md if present)
+     * @param array $messages The conversation history
+     * @param array $tools Tool definitions for the provider
+     * @param string $systemPrompt The system prompt to use
+     * @return \Generator Yields SSE-formatted strings
      */
     public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
 }
 
+// ── AnthropicAdapter.php ─────
+/**
+ * Anthropic (Claude) provider adapter.
+ * Implements the LutinProviderAdapter interface for Anthropic's API.
+ */
 class AnthropicAdapter implements LutinProviderAdapter {
     private string $apiKey;
     private string $model;
@@ -1120,6 +1283,11 @@ class AnthropicAdapter implements LutinProviderAdapter {
     }
 }
 
+// ── OpenAIAdapter.php ─────
+/**
+ * OpenAI (GPT) provider adapter.
+ * Implements the LutinProviderAdapter interface for OpenAI's API.
+ */
 class OpenAIAdapter implements LutinProviderAdapter {
     private string $apiKey;
     private string $model;
@@ -1229,21 +1397,39 @@ class OpenAIAdapter implements LutinProviderAdapter {
     }
 }
 
-class LutinAgent {
-    private const MAX_ITERATIONS = 10;
+// ── LutinAgent.php ─────
+/**
+ * Base class for all Lutin AI agents.
+ * Provides common infrastructure: provider adapter, message history, agentic loop, and SSE output.
+ * Subclasses must implement tool definitions and tool execution logic.
+ */
+abstract class LutinAgent {
+    /** Maximum number of iterations in the agentic loop to prevent infinite loops */
+    protected const MAX_ITERATIONS = 10;
 
-    private LutinConfig $config;
-    private LutinFileManager $fm;
-    private LutinProviderAdapter $adapter;
+    protected LutinConfig $config;
+    protected LutinFileManager $fm;
+    protected LutinProviderAdapter $adapter;
 
-    // Message history accumulated during this request (role/content pairs)
-    private array $messages = [];
+    /** Message history accumulated during this request (role/content pairs) */
+    protected array $messages = [];
 
-    // Tool definitions sent to the API
-    private array $toolDefinitions;
+    /** Tool definitions sent to the API */
+    protected array $toolDefinitions;
 
-    // Cached system prompt (base + AGENTS.md if present)
-    private ?string $systemPrompt = null;
+    /** Cached system prompt (base + AGENTS.md if present) */
+    protected ?string $systemPrompt = null;
+
+    /**
+     * Base system prompt. Subclasses can override or extend this.
+     */
+    protected function getBaseSystemPrompt(): string {
+        return 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
+            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
+            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
+            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
+            'When asked to create or modify a page, read the existing files first to understand the structure.';
+    }
 
     public function __construct(LutinConfig $config, LutinFileManager $fm) {
         $this->config = $config;
@@ -1256,16 +1442,12 @@ class LutinAgent {
      * Builds the system prompt by combining the base prompt with AGENTS.md content if present.
      * The AGENTS.md file is read from the lutin directory.
      */
-    private function buildSystemPrompt(): string {
+    protected function buildSystemPrompt(): string {
         if ($this->systemPrompt !== null) {
             return $this->systemPrompt;
         }
 
-        $basePrompt = 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
-            'You can read files, list directories, and write files anywhere in the project (relative to project root). ' .
-            'The web root (public files) is typically in a subdirectory like "public/" or "www/". ' .
-            'Always prefer making minimal, targeted changes. Never modify lutin.php or access the lutin/ directory. ' .
-            'When asked to create or modify a page, read the existing files first to understand the structure.';
+        $basePrompt = $this->getBaseSystemPrompt();
 
         $lutinDir = $this->config->getLutinDir();
         $agentsMdPath = $lutinDir . '/AGENTS.md';
@@ -1303,66 +1485,26 @@ class LutinAgent {
 
     /**
      * Returns the tool schema array in the format expected by the current provider.
+     * Subclasses must implement this to define their available tools.
      */
-    private function buildToolDefinitions(): array {
-        $provider = $this->config->getProvider();
-
-        $tools = [
-            [
-                'name' => 'list_files',
-                'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
-                    ],
-                    'required' => ['path'],
-                ],
-            ],
-            [
-                'name' => 'read_file',
-                'description' => 'Reads a file. Path is relative to project root.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                    ],
-                    'required' => ['path'],
-                ],
-            ],
-            [
-                'name' => 'write_file',
-                'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
-                'input_schema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                        'content' => ['type' => 'string', 'description' => 'File content'],
-                    ],
-                    'required' => ['path', 'content'],
-                ],
-            ],
-        ];
-
-        if ($provider === 'openai') {
-            // OpenAI format
-            return array_map(function($tool) {
-                return [
-                    'type' => 'function',
-                    'function' => $tool,
-                ];
-            }, $tools);
-        }
-
-        // Anthropic format
-        return $tools;
-    }
+    abstract protected function buildToolDefinitions(): array;
 
     /**
-     * Main entry point.
-     * 1. Sets up SSE headers
-     * 2. Appends the user message to $this->messages
-     * 3. Runs the agentic loop
+     * Executes a tool call from the AI.
+     * Subclasses must implement this to handle their specific tools.
+     * 
+     * @param string $name The tool name
+     * @param array $input The tool input parameters
+     * @return string The result as a string (typically JSON-encoded)
+     */
+    abstract protected function executeTool(string $name, array $input): string;
+
+    /**
+     * Main entry point for agent interaction.
+     * Sets up SSE headers, processes the user message, and runs the agentic loop.
+     * 
+     * @param string $userMessage The user's input message
+     * @param array $history Previous conversation history
      */
     public function chat(string $userMessage, array $history): void {
         // Set SSE headers
@@ -1388,9 +1530,13 @@ class LutinAgent {
     }
 
     /**
-     * Agentic loop (called recursively up to MAX_ITERATIONS = 10)
+     * Agentic loop (called recursively up to MAX_ITERATIONS).
+     * Communicates with the AI provider, handles responses, executes tools, and continues
+     * the conversation until completion or max iterations reached.
+     * 
+     * @param int $iteration Current iteration count
      */
-    private function runLoop(int $iteration = 0): void {
+    protected function runLoop(int $iteration = 0): void {
         if ($iteration >= self::MAX_ITERATIONS) {
             $this->sseFlush(['type' => 'stop', 'stop_reason' => 'max_iterations']);
             return;
@@ -1498,10 +1644,92 @@ class LutinAgent {
     }
 
     /**
-     * Dispatches a tool call from the AI to the appropriate LutinFileManager method.
-     * Returns the result as a string
+     * Sends a single SSE event.
+     * Format:  "data: {json}\n\n"
+     * Flushes immediately.
+     * 
+     * @param array $payload The data to send
      */
-    private function executeTool(string $name, array $input): string {
+    protected function sseFlush(array $payload): void {
+        echo 'data: ' . json_encode($payload) . "\n\n";
+        flush();
+    }
+}
+
+// ── LutinChatAgent.php ─────
+/**
+ * Chat Agent for Lutin.
+ * Handles conversational AI interactions with file management capabilities.
+ * Extends the base LutinAgent with specific tool definitions for file operations.
+ */
+class LutinChatAgent extends LutinAgent {
+
+    /**
+     * Returns the tool schema array for file operations.
+     * Tools: list_files, read_file, write_file
+     */
+    protected function buildToolDefinitions(): array {
+        $provider = $this->config->getProvider();
+
+        $tools = [
+            [
+                'name' => 'list_files',
+                'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
+                'input_schema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
+                    ],
+                    'required' => ['path'],
+                ],
+            ],
+            [
+                'name' => 'read_file',
+                'description' => 'Reads a file. Path is relative to project root.',
+                'input_schema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                    ],
+                    'required' => ['path'],
+                ],
+            ],
+            [
+                'name' => 'write_file',
+                'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
+                'input_schema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                        'content' => ['type' => 'string', 'description' => 'File content'],
+                    ],
+                    'required' => ['path', 'content'],
+                ],
+            ],
+        ];
+
+        if ($provider === 'openai') {
+            // OpenAI format
+            return array_map(function($tool) {
+                return [
+                    'type' => 'function',
+                    'function' => $tool,
+                ];
+            }, $tools);
+        }
+
+        // Anthropic format
+        return $tools;
+    }
+
+    /**
+     * Dispatches a tool call from the AI to the appropriate LutinFileManager method.
+     * 
+     * @param string $name The tool name
+     * @param array $input The tool input parameters
+     * @return string The result as a string (typically JSON-encoded)
+     */
+    protected function executeTool(string $name, array $input): string {
         try {
             return match ($name) {
                 'list_files' => json_encode($this->fm->listFiles($input['path'] ?? '')),
@@ -1516,16 +1744,6 @@ class LutinAgent {
             return 'Error: ' . $e->getMessage();
         }
     }
-
-    /**
-     * Sends a single SSE event.
-     * Format:  "data: {json}\n\n"
-     * Flushes immediately.
-     */
-    private function sseFlush(array $payload): void {
-        echo 'data: ' . json_encode($payload) . "\n\n";
-        flush();
-    }
 }
 
 // ── LutinRouter.php ─────
@@ -1533,14 +1751,14 @@ class LutinRouter {
     private LutinConfig $config;
     private LutinAuth $auth;
     private LutinFileManager $fm;
-    private ?LutinAgent $agent;
+    private ?LutinChatAgent $agent;
     private LutinView $view;
 
     public function __construct(
         LutinConfig $config,
         LutinAuth $auth,
         LutinFileManager $fm,
-        ?LutinAgent $agent,
+        ?LutinChatAgent $agent,
         LutinView $view
     ) {
         $this->config = $config;
@@ -1553,9 +1771,9 @@ class LutinRouter {
     /**
      * Lazily initialize the agent when needed.
      */
-    private function getAgent(): LutinAgent {
+    private function getAgent(): LutinChatAgent {
         if ($this->agent === null) {
-            $this->agent = new LutinAgent($this->config, $this->fm);
+            $this->agent = new LutinChatAgent($this->config, $this->fm);
         }
         return $this->agent;
     }
@@ -1586,6 +1804,9 @@ class LutinRouter {
             } elseif ($method === 'GET' && $action === 'list') {
                 $this->requireAuth();
                 $this->handleList();
+            } elseif ($method === 'GET' && $action === 'search') {
+                $this->requireAuth();
+                $this->handleSearch();
             } elseif ($method === 'GET' && $action === 'read') {
                 $this->requireAuth();
                 $this->handleRead();
@@ -1721,6 +1942,37 @@ class LutinRouter {
 
         try {
             $files = $this->fm->listFiles($path);
+            $this->jsonOk($files);
+        } catch (\Throwable $e) {
+            $this->jsonError($e->getMessage(), 400);
+        }
+    }
+
+    private function handleSearch(): void {
+        $query = $_GET['q'] ?? '';
+        $strict = ($_GET['strict'] ?? 'false') === 'true';
+        $filesOnly = ($_GET['files_only'] ?? 'true') === 'true';
+        $limit = min((int)($_GET['limit'] ?? 20), 100);
+
+        if (empty($query)) {
+            $this->jsonOk([]);
+            return;
+        }
+
+        try {
+            $options = [
+                'recursive' => true,
+                'search_pattern' => $query,
+                'strict_mode' => $strict,
+                'file_only' => $filesOnly,
+            ];
+            $files = $this->fm->listFiles('', $options);
+            
+            // Limit results
+            if (count($files) > $limit) {
+                $files = array_slice($files, 0, $limit);
+            }
+            
             $this->jsonOk($files);
         } catch (\Throwable $e) {
             $this->jsonError($e->getMessage(), 400);
@@ -2065,7 +2317,9 @@ const LUTIN_JS = <<<'LUTINJS'
 const state = {
   csrfToken: document.querySelector('meta[name="lutin-token"]')?.content ?? '',
   currentFile: null,        // relative path of open file
+  currentEditor: null,      // 'codemirror', 'tinymce', or 'prism'
   cmEditor: null,           // CodeMirror instance
+  tinymceEditor: null,      // TinyMCE instance
   chatHistory: [],          // [{role, content}] accumulated for context
   isStreaming: false,       // true while SSE is open
 };
@@ -2433,24 +2687,128 @@ function handleSseEvent(event, bubbleEl, setBubble, appendText) {
 // ── EDITOR ────────────────────────────────────────────────────────────────────
 function initEditor() {
   const cmContainer = document.getElementById('codemirror-container');
-  if (!cmContainer) return;
+  if (cmContainer) {
+    state.cmEditor = CodeMirror(cmContainer, {
+      lineNumbers: true,
+      theme: 'default',
+      mode: 'php',
+      indentUnit: 4,
+      tabSize: 4,
+      indentWithTabs: false,
+      lineWrapping: false,
+      value: '// Select a file to edit',
+    });
+  }
 
-  state.cmEditor = CodeMirror(cmContainer, {
-    lineNumbers: true,
-    theme: 'default',
-    mode: 'php',
-    indentUnit: 4,
-    tabSize: 4,
-    indentWithTabs: false,
-    lineWrapping: false,
-    value: '// Select a file to edit',
-  });
+  // Initialize TinyMCE config (will be applied when needed)
+  initJodit();
 
   const saveBtn = document.getElementById('save-btn');
   if (saveBtn) {
     saveBtn.addEventListener('click', saveFile);
   }
 }
+
+function initJodit() {
+  // Jodit will be initialized when needed
+  state.joditEditor = null;
+}
+
+function switchEditor(editorType) {
+  // Hide all editors
+  const cmContainer = document.getElementById('codemirror-container');
+  const tinymceContainer = document.getElementById('tinymce-container');
+  
+  if (cmContainer) cmContainer.style.display = 'none';
+  if (tinymceContainer) tinymceContainer.style.display = 'none';
+  
+  // Destroy Jodit instance when switching away from it to free memory
+  if (state.currentEditor === 'tinymce' && state.joditEditor && editorType !== 'tinymce') {
+    state.joditEditor.destruct();
+    state.joditEditor = null;
+  }
+  
+  state.currentEditor = editorType;
+  
+  // Show selected editor
+  if (editorType === 'tinymce') {
+    if (tinymceContainer) tinymceContainer.style.display = 'block';
+  } else {
+    if (cmContainer) cmContainer.style.display = 'block';
+    // Refresh CodeMirror when showing it (in case container was hidden)
+    if (state.cmEditor) {
+      state.cmEditor.refresh();
+    }
+  }
+}
+
+function getEditorContent() {
+  if (state.currentEditor === 'tinymce') {
+    return state.joditEditor ? state.joditEditor.value : '';
+  }
+  return state.cmEditor ? state.cmEditor.getValue() : '';
+}
+
+function setEditorContent(content, path) {
+  const ext = getFileExtension(path);
+  
+  if (isHtmlFile(ext)) {
+    // Use TinyMCE for HTML files
+    switchEditor('tinymce');
+    
+    if (state.joditEditor) {
+      state.joditEditor.value = content;
+    } else if (typeof Jodit !== 'undefined') {
+      // Recreate textarea if it was destroyed
+      const container = document.getElementById('tinymce-container');
+      if (container && !document.getElementById('tinymce-editor')) {
+        container.innerHTML = '<textarea id="tinymce-editor"></textarea>';
+      }
+      
+      // Jodit not initialized yet, init now
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      state.joditEditor = Jodit.make('#tinymce-editor', {
+        iframe: true,
+        height: '100%',
+        theme: isDark ? 'dark' : 'default',
+        toolbar: true,
+        buttons: [
+          'source', '|',
+          'bold', 'italic', 'underline', 'strikethrough', '|',
+          'ul', 'ol', '|',
+          'font', 'fontsize', 'brush', 'paragraph', '|',
+          'image', 'link', 'table', '|',
+          'align', 'undo', 'redo', '|',
+          'hr', 'eraser', 'copyformat', '|',
+          'symbol', 'fullsize'
+        ],
+      });
+      state.joditEditor.value = content;
+    }
+  } else {
+    // Use CodeMirror for all other files (PHP, JS, CSS, TXT, MD, etc.)
+    switchEditor('codemirror');
+    const mode = detectMode(path);
+    // Clear before setting mode to avoid tokenization errors
+    state.cmEditor.setValue('');
+    state.cmEditor.setOption('mode', mode);
+    // Use a small timeout to ensure mode is ready
+    requestAnimationFrame(() => {
+      state.cmEditor.setValue(content);
+    });
+  }
+}
+
+function getFileExtension(path) {
+  const match = path.match(/\.([^/.]+)$/);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function isHtmlFile(ext) {
+  return ['html', 'htm'].includes(ext);
+}
+
+
 
 async function openFile(path) {
   try {
@@ -2461,15 +2819,37 @@ async function openFile(path) {
     }
 
     state.currentFile = path;
-    const mode = detectMode(path);
-    state.cmEditor.setOption('mode', mode);
-    state.cmEditor.setValue(result.data.content);
+    
+    // Set content in appropriate editor
+    setEditorContent(result.data.content, path);
 
-    document.getElementById('editor-filename').textContent = path;
-    document.getElementById('save-btn').disabled = false;
+    const filenameInput = document.getElementById('editor-filename');
+    if (filenameInput) filenameInput.value = path;
+    
+    const saveBtn = document.getElementById('save-btn');
+    if (saveBtn) saveBtn.disabled = false;
+    
+    // Update AI helper context
+    updateEditorAiContext(path);
+    
+    // Clear any autocomplete
+    hideFilenameAutocomplete();
   } catch (error) {
     showToast('Error: ' + error.message, 'error');
   }
+}
+
+async function openFileFromInput() {
+  const filenameInput = document.getElementById('editor-filename');
+  if (!filenameInput) return;
+  
+  const path = filenameInput.value.trim();
+  if (!path) {
+    showToast('Please enter a file path', 'warning');
+    return;
+  }
+  
+  await openFile(path);
 }
 
 async function saveFile() {
@@ -2479,9 +2859,10 @@ async function saveFile() {
   }
 
   try {
+    const content = getEditorContent();
     const result = await apiPost('write', {
       path: state.currentFile,
-      content: state.cmEditor.getValue(),
+      content: content,
     });
 
     if (result.ok) {
@@ -2499,27 +2880,41 @@ function detectMode(path) {
   if (path.endsWith('.js')) return 'javascript';
   if (path.endsWith('.css')) return 'css';
   if (path.endsWith('.html') || path.endsWith('.htm')) return 'htmlmixed';
-  return 'null';
+  if (path.endsWith('.json')) return 'application/json';
+  if (path.endsWith('.xml')) return 'xml';
+  if (path.endsWith('.sql')) return 'sql';
+  if (path.endsWith('.md')) return 'markdown';
+  if (path.endsWith('.txt')) return 'text';
+  return 'text';
 }
 
 // ── FILE TREE ─────────────────────────────────────────────────────────────────
 function initFileTree() {
-  const fileList = document.getElementById('file-list');
-  if (!fileList) return;
+  const fileTreeRoot = document.getElementById('file-tree-root');
+  if (!fileTreeRoot) return;
 
-  loadDir('', fileList);
+  loadDir('', fileTreeRoot);
 }
 
 async function loadDir(path, containerEl) {
   try {
     const result = await apiGet('list', { path });
     if (!result.ok) {
-      showToast('Error: ' + result.error, 'error');
+      showToast('Error loading files: ' + result.error, 'error');
       return;
     }
 
     containerEl.innerHTML = '';
-    for (const entry of result.data) {
+    
+    // Sort entries: directories first, then files alphabetically
+    const sortedEntries = result.data.sort((a, b) => {
+      if (a.type === b.type) {
+        return a.name.localeCompare(b.name);
+      }
+      return a.type === 'dir' ? -1 : 1;
+    });
+    
+    for (const entry of sortedEntries) {
       renderFileEntry(entry, containerEl);
     }
   } catch (error) {
@@ -2529,39 +2924,386 @@ async function loadDir(path, containerEl) {
 
 function renderFileEntry(entry, containerEl) {
   const div = document.createElement('div');
-  div.style.paddingLeft = '1rem';
+  div.className = 'file-entry-wrapper';
 
   if (entry.type === 'dir') {
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = '📁 ' + entry.name;
-    summary.style.cursor = 'pointer';
-    const subDir = document.createElement('div');
-
-    details.appendChild(summary);
-    details.appendChild(subDir);
-
-    details.addEventListener('toggle', async () => {
-      if (details.open && subDir.children.length === 0) {
-        await loadDir(entry.path, subDir);
+    // Directory with expandable children
+    const dirEntry = document.createElement('div');
+    dirEntry.className = 'file-entry dir';
+    dirEntry.dataset.path = entry.path;
+    dirEntry.innerHTML = `<span class="icon">📁</span><span class="name">${escapeHtml(entry.name)}</span>`;
+    
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'file-children';
+    childrenContainer.style.display = 'none';
+    
+    let loaded = false;
+    dirEntry.addEventListener('click', async () => {
+      const isExpanded = childrenContainer.style.display !== 'none';
+      
+      if (isExpanded) {
+        // Collapse
+        childrenContainer.style.display = 'none';
+        dirEntry.querySelector('.icon').textContent = '📁';
+      } else {
+        // Expand
+        childrenContainer.style.display = 'block';
+        dirEntry.querySelector('.icon').textContent = '📂';
+        
+        if (!loaded) {
+          await loadDir(entry.path, childrenContainer);
+          loaded = true;
+        }
       }
     });
-
-    div.appendChild(details);
+    
+    div.appendChild(dirEntry);
+    div.appendChild(childrenContainer);
   } else {
-    const link = document.createElement('a');
-    link.href = '#';
-    link.textContent = '📄 ' + entry.name;
-    link.style.display = 'block';
-    link.style.cursor = 'pointer';
-    link.onclick = (e) => {
-      e.preventDefault();
+    // File entry
+    const fileEntry = document.createElement('div');
+    fileEntry.className = 'file-entry file';
+    fileEntry.dataset.path = entry.path;
+    fileEntry.innerHTML = `<span class="icon">📄</span><span class="name">${escapeHtml(entry.name)}</span>`;
+    fileEntry.addEventListener('click', () => {
+      // Remove active class from all entries
+      document.querySelectorAll('#tab-editor .file-entry').forEach(el => el.classList.remove('active'));
+      // Add active class to this entry
+      fileEntry.classList.add('active');
       openFile(entry.path);
-    };
-    div.appendChild(link);
+    });
+    div.appendChild(fileEntry);
   }
 
   containerEl.appendChild(div);
+}
+
+// ── EDITOR AI HELPER ──────────────────────────────────────────────────────────
+function initEditorAiHelper() {
+  const aiSubmitBtn = document.getElementById('editor-ai-submit');
+  const aiPromptInput = document.getElementById('editor-ai-prompt');
+  
+  if (!aiSubmitBtn || !aiPromptInput) return;
+  
+  aiSubmitBtn.addEventListener('click', async () => {
+    const prompt = aiPromptInput.value.trim();
+    if (!prompt) {
+      showToast('Please enter a prompt', 'warning');
+      return;
+    }
+    
+    // Get current file content if available
+    const currentFile = state.currentFile;
+    const currentContent = getEditorContent();
+    
+    await sendEditorAiRequest(prompt, currentFile, currentContent);
+  });
+  
+  // Allow Ctrl+Enter to submit
+  aiPromptInput.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      aiSubmitBtn.click();
+    }
+  });
+}
+
+async function sendEditorAiRequest(prompt, currentFile, currentContent) {
+  const responseContainer = document.getElementById('editor-ai-response');
+  if (!responseContainer) return;
+  
+  responseContainer.classList.add('loading');
+  responseContainer.textContent = '';
+  
+  try {
+    // Build context message with file info
+    let contextMessage = prompt;
+    if (currentFile) {
+      contextMessage = `I'm working on file "${currentFile}". Here's the current content:\n\n\`\`\`\n${currentContent}\n\`\`\`\n\nMy question: ${prompt}`;
+    }
+    
+    const response = await fetch('?action=chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lutin-Token': state.csrfToken,
+      },
+      body: JSON.stringify({
+        message: contextMessage,
+        history: state.chatHistory,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMsg = 'Error sending message';
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMsg = errorJson.error || errorMsg;
+      } catch {}
+      responseContainer.classList.remove('loading');
+      responseContainer.textContent = '❌ Error: ' + errorMsg;
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    responseContainer.classList.remove('loading');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(jsonStr);
+          
+          if (event.type === 'text') {
+            fullResponse += event.delta;
+            responseContainer.textContent = fullResponse;
+            responseContainer.scrollTop = responseContainer.scrollHeight;
+          } else if (event.type === 'error') {
+            responseContainer.textContent = '❌ Error: ' + event.message;
+          } else if (event.type === 'tool_start') {
+            responseContainer.textContent = fullResponse + '\n[Using tool: ' + event.name + '...]';
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e, line);
+        }
+      }
+    }
+
+    // Add to chat history
+    if (fullResponse) {
+      state.chatHistory.push({ role: 'user', content: prompt });
+      state.chatHistory.push({ role: 'assistant', content: fullResponse });
+    }
+    
+  } catch (error) {
+    responseContainer.classList.remove('loading');
+    responseContainer.textContent = '❌ Error: ' + error.message;
+  }
+}
+
+function updateEditorAiContext(filename) {
+  const contextInfo = document.getElementById('ai-context-file');
+  if (contextInfo) {
+    contextInfo.textContent = filename ? `Context: ${filename}` : 'No file context';
+  }
+}
+
+// ── FILENAME AUTOCOMPLETE ────────────────────────────────────────────────────
+let filenameAutocompleteDebounce = null;
+let filenameAutocompleteSelected = -1;
+
+function initFilenameAutocomplete() {
+  const filenameInput = document.getElementById('editor-filename');
+  const dropdown = document.getElementById('filename-autocomplete');
+  
+  if (!filenameInput || !dropdown) return;
+  
+  // Input event for search
+  filenameInput.addEventListener('input', () => {
+    const query = filenameInput.value.trim();
+    
+    // Clear previous debounce
+    if (filenameAutocompleteDebounce) {
+      clearTimeout(filenameAutocompleteDebounce);
+    }
+    
+    if (query.length < 1) {
+      hideFilenameAutocomplete();
+      return;
+    }
+    
+    // Debounce search
+    filenameAutocompleteDebounce = setTimeout(() => {
+      searchFiles(query);
+    }, 150);
+  });
+  
+  // Keyboard navigation
+  filenameInput.addEventListener('keydown', (e) => {
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        if (items.length > 0) {
+          filenameAutocompleteSelected = Math.min(
+            filenameAutocompleteSelected + 1, 
+            items.length - 1
+          );
+          updateAutocompleteSelection(items);
+        }
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        if (items.length > 0) {
+          filenameAutocompleteSelected = Math.max(
+            filenameAutocompleteSelected - 1, 
+            -1
+          );
+          updateAutocompleteSelection(items);
+        }
+        break;
+      case 'Enter':
+        e.preventDefault();
+        if (filenameAutocompleteSelected >= 0 && items[filenameAutocompleteSelected]) {
+          selectAutocompleteItem(items[filenameAutocompleteSelected]);
+        } else {
+          openFileFromInput();
+        }
+        break;
+      case 'Escape':
+        hideFilenameAutocomplete();
+        break;
+    }
+  });
+  
+  // Focus out to hide dropdown (with delay to allow clicking items)
+  filenameInput.addEventListener('blur', () => {
+    setTimeout(() => hideFilenameAutocomplete(), 200);
+  });
+  
+  // Focus to show dropdown if has value
+  filenameInput.addEventListener('focus', () => {
+    const query = filenameInput.value.trim();
+    if (query.length >= 1) {
+      searchFiles(query);
+    }
+  });
+}
+
+async function searchFiles(query) {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (!dropdown) return;
+  
+  try {
+    const result = await apiGet('search', { 
+      q: query,
+      strict: 'false',
+      files_only: 'true',
+      limit: '20'
+    });
+    
+    if (!result.ok) {
+      hideFilenameAutocomplete();
+      return;
+    }
+    
+    renderAutocompleteResults(result.data);
+  } catch (error) {
+    hideFilenameAutocomplete();
+  }
+}
+
+function renderAutocompleteResults(files) {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (!dropdown) return;
+  
+  dropdown.innerHTML = '';
+  filenameAutocompleteSelected = -1;
+  
+  if (files.length === 0) {
+    dropdown.innerHTML = '<div class="autocomplete-no-results">No files found</div>';
+    dropdown.classList.add('active');
+    return;
+  }
+  
+  // Sort by relevance (exact matches first, then by path length)
+  const query = document.getElementById('editor-filename')?.value?.toLowerCase() || '';
+  files.sort((a, b) => {
+    const aPath = a.path.toLowerCase();
+    const bPath = b.path.toLowerCase();
+    
+    // Exact match bonus
+    if (aPath === query) return -1;
+    if (bPath === query) return 1;
+    
+    // Starts with bonus
+    if (aPath.startsWith(query) && !bPath.startsWith(query)) return -1;
+    if (bPath.startsWith(query) && !aPath.startsWith(query)) return 1;
+    
+    // Shorter paths first
+    return aPath.length - bPath.length;
+  });
+  
+  files.forEach((file, index) => {
+    const item = document.createElement('div');
+    item.className = 'autocomplete-item';
+    item.dataset.path = file.path;
+    item.dataset.index = index;
+    
+    const icon = file.type === 'dir' ? '📁' : getFileIcon(file.path);
+    
+    item.innerHTML = `
+      <span class="icon">${icon}</span>
+      <span class="name">${escapeHtml(file.name)}</span>
+      <span class="path">${escapeHtml(file.path)}</span>
+    `;
+    
+    item.addEventListener('click', () => selectAutocompleteItem(item));
+    item.addEventListener('mouseenter', () => {
+      filenameAutocompleteSelected = index;
+      updateAutocompleteSelection(dropdown.querySelectorAll('.autocomplete-item'));
+    });
+    
+    dropdown.appendChild(item);
+  });
+  
+  dropdown.classList.add('active');
+}
+
+function getFileIcon(path) {
+  if (path.endsWith('.php')) return '🐘';
+  if (path.endsWith('.js')) return '📜';
+  if (path.endsWith('.css')) return '🎨';
+  if (path.endsWith('.html') || path.endsWith('.htm')) return '🌐';
+  if (path.endsWith('.json')) return '📋';
+  if (path.endsWith('.md')) return '📝';
+  if (path.endsWith('.sql')) return '🗄️';
+  return '📄';
+}
+
+function updateAutocompleteSelection(items) {
+  items.forEach((item, index) => {
+    if (index === filenameAutocompleteSelected) {
+      item.classList.add('selected');
+      item.scrollIntoView({ block: 'nearest' });
+    } else {
+      item.classList.remove('selected');
+    }
+  });
+}
+
+function selectAutocompleteItem(item) {
+  const path = item.dataset.path;
+  const filenameInput = document.getElementById('editor-filename');
+  if (filenameInput) {
+    filenameInput.value = path;
+  }
+  hideFilenameAutocomplete();
+  openFile(path);
+}
+
+function hideFilenameAutocomplete() {
+  const dropdown = document.getElementById('filename-autocomplete');
+  if (dropdown) {
+    dropdown.classList.remove('active');
+    dropdown.innerHTML = '';
+  }
+  filenameAutocompleteSelected = -1;
 }
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -2691,7 +3433,7 @@ async function viewBackup(backupPath) {
   try {
     const result = await apiGet('read', { path: backupPath });
     if (result.ok) {
-      state.cmEditor.setValue(result.data.content);
+      setEditorContent(result.data.content, backupPath);
       document.getElementById('editor-filename').textContent = backupPath + ' (backup)';
     } else {
       showToast('Error: ' + result.error, 'error');
@@ -2932,6 +3674,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initChat();
   initEditor();
   initFileTree();
+  initFilenameAutocomplete();
+  initEditorAiHelper();
   initConfig();
   initUrlLookup();
   initTemplates();
@@ -2973,6 +3717,8 @@ const LUTIN_VIEW_LAYOUT = <<<'LUTINVIEW'
   <title>Lutin — <?= htmlspecialchars($siteTitle) ?></title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jodit@4.2.47/es2021/jodit.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/jodit@4.2.47/es2021/jodit.min.js"></script>
   <style>
     /* Hide all sections by default, JavaScript will show the active one */
     section { display: none; }
@@ -3031,10 +3777,14 @@ const LUTIN_VIEW_LAYOUT = <<<'LUTINVIEW'
   <?php endif; ?>
   <main><?= $tabContent ?></main>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/php/php.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/php/php.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.js"></script>
   <script><?= $appJs ?></script>
 </body>
 </html>
@@ -3119,25 +3869,350 @@ LUTINVIEW;
 
 const LUTIN_VIEW_TAB_EDITOR = <<<'LUTINVIEW'
 <section id="tab-editor">
-  <div style="display: grid; grid-template-columns: 250px 1fr; gap: 1rem; height: 600px;">
-    <aside id="file-tree">
-      <form id="url-lookup-form">
-        <fieldset>
-          <input id="url-input" type="url" placeholder="Paste page URL…">
-          <button type="submit">Find</button>
-        </fieldset>
-      </form>
-      <div id="file-list"></div>
-    </aside>
-    <div id="editor-panel">
-      <div id="editor-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #ccc;">
-        <span id="editor-filename" style="font-weight: bold;">No file open</span>
-        <button id="save-btn" disabled>Save</button>
+  <!-- 3-column layout: File Explorer | Editor | AI Helper -->
+  <div class="editor-layout">
+    
+    <!-- Left: File Explorer -->
+    <aside class="editor-sidebar" id="file-explorer">
+      <header class="sidebar-header">
+        <strong>📁 Files</strong>
+      </header>
+      <div class="file-tree-container">
+        <div id="file-tree-root"></div>
       </div>
-      <div id="codemirror-container" style="border: 1px solid #ccc; border-radius: 4px;"></div>
+    </aside>
+
+    <!-- Middle: Editor -->
+    <div class="editor-main">
+      <header class="editor-toolbar">
+        <div class="filename-input-wrapper">
+          <input 
+            type="text" 
+            id="editor-filename" 
+            class="filename-input" 
+            placeholder="Enter file path..."
+            autocomplete="off"
+          >
+          <div id="filename-autocomplete" class="autocomplete-dropdown"></div>
+        </div>
+        <button id="save-btn" class="btn-primary" disabled>💾 Save</button>
+      </header>
+      <div class="editor-container">
+        <!-- CodeMirror for code files (PHP, JS, CSS, etc.) -->
+        <div id="codemirror-container"></div>
+        <!-- TinyMCE for HTML files -->
+        <div id="tinymce-container" style="display: none;">
+          <textarea id="tinymce-editor"></textarea>
+        </div>
+      </div>
     </div>
+
+    <!-- Right: AI Helper Panel -->
+    <aside class="editor-ai-panel" id="ai-helper">
+      <header class="sidebar-header">
+        <strong>🤖 AI Helper</strong>
+      </header>
+      <div class="ai-panel-content">
+        <div class="ai-context-info">
+          <small id="ai-context-file">No file context</small>
+        </div>
+        <textarea 
+          id="editor-ai-prompt" 
+          class="ai-prompt-input" 
+          placeholder="Ask AI to help with the current file..."
+          rows="6"
+        ></textarea>
+        <button id="editor-ai-submit" class="btn-primary btn-full">Ask AI</button>
+        <div id="editor-ai-response" class="ai-response-container"></div>
+      </div>
+    </aside>
+
   </div>
 </section>
+
+<style>
+  /* Editor 3-column layout */
+  #tab-editor .editor-layout {
+    display: grid;
+    grid-template-columns: 260px 1fr 320px;
+    gap: 0;
+    height: calc(100vh - 80px);
+    min-height: 600px;
+    border: 1px solid var(--muted-border-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  /* Sidebars styling */
+  #tab-editor .editor-sidebar,
+  #tab-editor .editor-ai-panel {
+    background: var(--card-background-color);
+    display: flex;
+    flex-direction: column;
+  }
+
+  #tab-editor .editor-sidebar {
+    border-right: 1px solid var(--muted-border-color);
+  }
+
+  #tab-editor .editor-ai-panel {
+    border-left: 1px solid var(--muted-border-color);
+  }
+
+  /* Sidebar headers */
+  #tab-editor .sidebar-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--muted-border-color);
+    background: var(--background-color);
+  }
+
+  /* File tree container */
+  #tab-editor .file-tree-container {
+    flex: 1;
+    overflow: auto;
+    padding: 0.5rem;
+  }
+
+  /* File tree items */
+  #tab-editor .file-entry {
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+  }
+
+  #tab-editor .file-entry:hover {
+    background: var(--primary-focus);
+  }
+
+  #tab-editor .file-entry.active {
+    background: var(--primary);
+    color: white;
+  }
+
+  #tab-editor .file-entry .icon {
+    font-size: 1rem;
+  }
+
+  #tab-editor .file-entry.dir .icon {
+    color: #f0c040;
+  }
+
+  #tab-editor .file-entry.file .icon {
+    color: #60a0ff;
+  }
+
+  #tab-editor .file-children {
+    margin-left: 1rem;
+    border-left: 1px solid var(--muted-border-color);
+    padding-left: 0.5rem;
+  }
+
+  /* Main editor area */
+  #tab-editor .editor-main {
+    display: flex;
+    flex-direction: column;
+    background: var(--background-color);
+  }
+
+  #tab-editor .editor-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--muted-border-color);
+    background: var(--card-background-color);
+  }
+
+  #tab-editor .filename-input-wrapper {
+    position: relative;
+    flex: 1;
+    margin-right: 1rem;
+  }
+
+  #tab-editor .filename-input {
+    width: 100%;
+    font-family: monospace;
+    font-size: 0.9rem;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+  }
+
+  #tab-editor .autocomplete-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--card-background-color);
+    background-color: var(--card-background-color);
+    border: 1px solid var(--muted-border-color);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Force background for dark mode compatibility */
+  [data-theme="dark"] #tab-editor .autocomplete-dropdown {
+    background: #1a1a1a;
+    background-color: #1a1a1a;
+  }
+
+  [data-theme="light"] #tab-editor .autocomplete-dropdown {
+    background: #ffffff;
+    background-color: #ffffff;
+  }
+
+  #tab-editor .autocomplete-dropdown.active {
+    display: block;
+  }
+
+  #tab-editor .autocomplete-item {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    background: inherit;
+  }
+
+  #tab-editor .autocomplete-item:hover,
+  #tab-editor .autocomplete-item.selected {
+    background: var(--primary-focus);
+    background-color: var(--primary-focus);
+  }
+
+  [data-theme="dark"] #tab-editor .autocomplete-item.selected,
+  [data-theme="dark"] #tab-editor .autocomplete-item:hover {
+    background: #2d4a6f;
+    background-color: #2d4a6f;
+  }
+
+  #tab-editor .autocomplete-item .icon {
+    font-size: 0.9rem;
+  }
+
+  #tab-editor .autocomplete-item .path {
+    color: var(--muted-color);
+    font-size: 0.8rem;
+    margin-left: auto;
+  }
+
+  #tab-editor .autocomplete-no-results {
+    padding: 0.75rem;
+    color: var(--muted-color);
+    font-style: italic;
+    text-align: center;
+  }
+
+  #tab-editor .editor-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #tab-editor #codemirror-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+
+  #tab-editor #codemirror-container .CodeMirror {
+    height: 100%;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 0.9rem;
+  }
+
+  /* TinyMCE container */
+  #tab-editor #tinymce-container {
+    height: 100%;
+  }
+
+  #tab-editor #tinymce-container .tox {
+    border: none !important;
+  }
+
+  #tab-editor #tinymce-container .tox-edit-area {
+    background: var(--background-color) !important;
+  }
+
+  /* AI Panel */
+  #tab-editor .ai-panel-content {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1;
+    overflow: auto;
+  }
+
+  #tab-editor .ai-context-info {
+    padding: 0.5rem;
+    background: var(--background-color);
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  #tab-editor .ai-context-info small {
+    color: var(--muted-color);
+  }
+
+  #tab-editor .ai-prompt-input {
+    width: 100%;
+    resize: vertical;
+    font-family: inherit;
+    font-size: 0.9rem;
+  }
+
+  #tab-editor .ai-response-container {
+    flex: 1;
+    overflow: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  #tab-editor .ai-response-container:empty::before {
+    content: "AI response will appear here...";
+    color: var(--muted-color);
+    font-style: italic;
+  }
+
+  #tab-editor .ai-response-container.loading::before {
+    content: "🤔 Thinking...";
+    color: var(--primary);
+  }
+
+  #tab-editor .btn-full {
+    width: 100%;
+  }
+
+  /* Responsive adjustments */
+  @media (max-width: 1200px) {
+    #tab-editor .editor-layout {
+      grid-template-columns: 220px 1fr 280px;
+    }
+  }
+
+  @media (max-width: 900px) {
+    #tab-editor .editor-layout {
+      grid-template-columns: 200px 1fr;
+    }
+    #tab-editor .editor-ai-panel {
+      display: none;
+    }
+  }
+</style>
 
 LUTINVIEW;
 
@@ -3254,7 +4329,13 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/classes/LutinConfig.php';
     require_once __DIR__ . '/classes/LutinAuth.php';
     require_once __DIR__ . '/classes/LutinFileManager.php';
-    require_once __DIR__ . '/classes/LutinAgent.php';
+    // Agent provider adapters
+    require_once __DIR__ . '/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
+    require_once __DIR__ . '/agent_providers/OpenAIAdapter.php';
+    // Agent classes
+    require_once __DIR__ . '/agents/LutinAgent.php';
+    require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/classes/LutinRouter.php';
     require_once __DIR__ . '/classes/LutinView.php';
 }
