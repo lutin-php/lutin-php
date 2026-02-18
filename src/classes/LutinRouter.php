@@ -177,9 +177,9 @@ class LutinRouter {
     }
 
     private function handleTemplatesList(): void {
-        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-starters/main/starters.json';
+        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-templates/main/templates.json';
         $cacheDir = $this->config->getTempDir();
-        $cacheFile = $cacheDir . '/starters.json';
+        $cacheFile = $cacheDir . '/templates.json';
         $maxAge = 86400; // 1 day in seconds
 
         // Ensure cache directory exists
@@ -252,7 +252,7 @@ class LutinRouter {
 
         try {
             $manifest = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
-            $templates = $manifest['starters'] ?? [];
+            $templates = $manifest['templates'] ?? [];
             $this->jsonOk([
                 'templates' => $templates,
                 'cached' => !$needsFetch,

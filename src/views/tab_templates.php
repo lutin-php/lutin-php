@@ -1,6 +1,6 @@
 <section id="tab-templates">
   <article style="max-width: 800px; margin: 2rem auto;">
-    <h2>Choose a Starter Template</h2>
+    <h2>Choose a Template</h2>
     <p>Select a template to get started quickly, or choose "Empty Project" to start from scratch.</p>
     
     <div id="templates-loading" class="loading-indicator">

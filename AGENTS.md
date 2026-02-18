@@ -69,7 +69,7 @@ lutin/
 │   └── lutin/                  # Lutin directory (stores config, backups)
 ├── tests/                      # Unit tests
 ├── docs/
-│   ├── STARTER_SPECS.md
+│   ├── TEMPLATE_SPECS.md
 │   └── DEV_PLAN_V1.md
 ├── VERSION                     # Version file (used by build.php)
 └── CLAUDE.md                   # This file

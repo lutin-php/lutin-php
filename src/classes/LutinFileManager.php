@@ -565,9 +565,9 @@ class LutinFileManager {
     // ── Template Installation ───────────────────────────────────────────────────
 
     /**
-     * Downloads and installs a starter template from a ZIP URL.
+     * Downloads and installs a template from a ZIP URL.
      * 
-     * The ZIP structure follows lutin-starters convention:
+     * The ZIP structure follows lutin-templates convention:
      * - public/     → Contents go to web root (where lutin.php lives)
      * - src/        → Goes to sibling of lutin directory
      * - data/       → Goes to sibling of lutin directory  

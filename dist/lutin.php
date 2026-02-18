@@ -868,9 +868,9 @@ class LutinFileManager {
     // ── Template Installation ───────────────────────────────────────────────────
 
     /**
-     * Downloads and installs a starter template from a ZIP URL.
+     * Downloads and installs a template from a ZIP URL.
      * 
-     * The ZIP structure follows lutin-starters convention:
+     * The ZIP structure follows lutin-templates convention:
      * - public/     → Contents go to web root (where lutin.php lives)
      * - src/        → Goes to sibling of lutin directory
      * - data/       → Goes to sibling of lutin directory  
@@ -2577,9 +2577,9 @@ class LutinRouter {
     }
 
     private function handleTemplatesList(): void {
-        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-starters/main/starters.json';
+        $manifestUrl = 'https://raw.githubusercontent.com/lutin-php/lutin-templates/main/templates.json';
         $cacheDir = $this->config->getTempDir();
-        $cacheFile = $cacheDir . '/starters.json';
+        $cacheFile = $cacheDir . '/templates.json';
         $maxAge = 86400; // 1 day in seconds
 
         // Ensure cache directory exists
@@ -2652,7 +2652,7 @@ class LutinRouter {
 
         try {
             $manifest = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
-            $templates = $manifest['starters'] ?? [];
+            $templates = $manifest['templates'] ?? [];
             $this->jsonOk([
                 'templates' => $templates,
                 'cached' => !$needsFetch,
@@ -4239,7 +4239,7 @@ function addTemplateCard(template) {
   article.style.cssText = 'cursor: pointer; border: 2px solid transparent;';
 
   const name = escapeHtml(template.name || template.id);
-  const description = escapeHtml(template.description || 'A starter template for your project.');
+  const description = escapeHtml(template.description || 'A template for your project.');
 
   article.innerHTML = `
     <h3>${name}</h3>
@@ -4879,7 +4879,7 @@ LUTINVIEW;
 const LUTIN_VIEW_TAB_TEMPLATES = <<<'LUTINVIEW'
 <section id="tab-templates">
   <article style="max-width: 800px; margin: 2rem auto;">
-    <h2>Choose a Starter Template</h2>
+    <h2>Choose a Template</h2>
     <p>Select a template to get started quickly, or choose "Empty Project" to start from scratch.</p>
     
     <div id="templates-loading" class="loading-indicator">

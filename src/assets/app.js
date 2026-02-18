@@ -1406,7 +1406,7 @@ function addTemplateCard(template) {
   article.style.cssText = 'cursor: pointer; border: 2px solid transparent;';
 
   const name = escapeHtml(template.name || template.id);
-  const description = escapeHtml(template.description || 'A starter template for your project.');
+  const description = escapeHtml(template.description || 'A template for your project.');
 
   article.innerHTML = `
     <h3>${name}</h3>
