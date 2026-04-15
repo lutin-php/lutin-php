@@ -1,6 +1,6 @@
 # Lutin.php
 
-A self-hosted, single-file AI-powered website editor.
+A self-hosted, single-file AI-powered frameworkless PHP website editor.
 
 Drop `lutin.php` into any web public directory and get an AI assistant that helps you build and edit your website through natural conversation. Remove `lutin.php` and the `lutin/` directory when you're done — your website remains 100% functional.
 

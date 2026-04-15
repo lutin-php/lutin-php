@@ -48,6 +48,6 @@ class LutinChatAgent extends AbstractLutinAgent {
      * @return array Provider-agnostic tool definitions
      */
     protected function buildToolDefinitions(): array {
-        return $this->selectTools(['list_files', 'read_file', 'write_file']);
+        return $this->selectTools(['list_files', 'read_file', 'write_file', 'list_modules']);
     }
 }

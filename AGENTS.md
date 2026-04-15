@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Lutin.php** is a self-hosted, single-file PHP development environment.
+**Lutin.php** is a self-hosted, single-file frameworkless PHP development environment.
 It lets users build and edit websites through an AI-powered chat interface or a manual code editor.
 When `lutin.php` and the lutin directory are removed, the managed website remains 100% functional.
 

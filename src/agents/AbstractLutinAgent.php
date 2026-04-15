@@ -58,6 +58,16 @@ abstract class AbstractLutinAgent {
                 'required' => ['path'],
             ],
         ],
+        'list_modules' => [
+            'name' => 'list_modules',
+            'description' => 'Lists available Lutin modules from the remote repository. Can be filtered by a search query.',
+            'input_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'query' => ['type' => 'string', 'description' => 'Optional: A search query to filter modules by name or description.'],
+                ],
+            ],
+        ],
     ];
 
     protected LutinConfig $config;
@@ -169,11 +179,52 @@ abstract class AbstractLutinAgent {
                     $this->fm->writeFile($input['path'] ?? '', $input['content'] ?? '');
                     return json_encode(['ok' => true]);
                 })(),
+                'list_modules' => (function() use ($input) {
+                    $query = $input['query'] ?? '';
+                    $modules = $this->fetchModulesJson();
+                    if (empty($query)) {
+                        return json_encode($modules);
+                    }
+                    $filteredModules = array_filter($modules, function($module) use ($query) {
+                        $queryLower = strtolower($query);
+                        return str_contains(strtolower($module['name']), $queryLower) ||
+                               str_contains(strtolower($module['description']), $queryLower);
+                    });
+                    return json_encode(array_values($filteredModules)); // Re-index array
+                })(),
                 default => $this->executeCustomTool($name, $input),
             };
         } catch (\Throwable $e) {
             return 'Error: ' . $e->getMessage();
         }
+    }
+
+    /**
+     * Fetches and parses the remote modules.json file.
+     *
+     * @return array An array of modules.
+     * @throws \RuntimeException if fetching or parsing fails.
+     */
+    private function fetchModulesJson(): array {
+        $modulesUrl = 'https://github.com/Nicoco220983/lutin-modules/raw/main/modules.json';
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 10, // Timeout in seconds
+            ],
+        ]);
+        $jsonContent = @file_get_contents($modulesUrl, false, $context);
+
+        if ($jsonContent === false) {
+            throw new \RuntimeException('Failed to fetch modules from ' . $modulesUrl);
+        }
+
+        $modules = json_decode($jsonContent, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException('Failed to parse modules.json: ' . json_last_error_msg());
+        }
+
+        return $modules;
     }
 
     /**
