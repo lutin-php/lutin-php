@@ -34,9 +34,16 @@ class OpenAIGenericAdapter implements AbstractLutinAdapter {
         $payload = [
             'model' => $this->model,
             'messages' => $fullMessages,
-            'tools' => $tools,
-            'tool_choice' => 'auto',
+            'stream' => false,
         ];
+
+        if (!empty($tools)) {
+            $payload['tools'] = $tools;
+            $payload['tool_choice'] = 'auto';
+        }
+
+        // TMP
+        file_put_contents('php://stderr', json_encode($payload, JSON_PRETTY_PRINT));
 
         $ch = curl_init($this->url);
         curl_setopt_array($ch, [
@@ -45,6 +52,7 @@ class OpenAIGenericAdapter implements AbstractLutinAdapter {
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $this->apiKey,
                 'Content-Type: application/json',
+                'User-Agent: Lutin-Agent-PHP/1.0',
             ],
             CURLOPT_POSTFIELDS => json_encode($payload),
             CURLOPT_TIMEOUT => 300,
@@ -130,9 +138,60 @@ class OpenAIGenericAdapter implements AbstractLutinAdapter {
                 'function' => [
                     'name' => $tool['name'],
                     'description' => $tool['description'],
-                    'parameters' => $tool['input_schema'],
+                    'parameters' => (object)($tool['input_schema'] ?? [
+                        'type' => 'object',
+                        'properties' => (object)[]
+                    ]),
                 ],
             ];
         }, $tools);
+    }
+
+    public function prepareHistory(array $messages): array {
+        $prepared = [];
+
+        foreach ($messages as $msg) {
+            $role = $msg['role'];
+            $content = $msg['content'] ?? '';
+
+            // Si c'est un message assistant avec des appels d'outils
+            if ($role === 'assistant' && !empty($msg['tool_calls'])) {
+                $toolCalls = [];
+                foreach ($msg['tool_calls'] as $tc) {
+                    $toolCalls[] = [
+                        'id' => $tc['id'],
+                        'type' => 'function',
+                        'function' => [
+                            'name' => $tc['name'],
+                            'arguments' => json_encode($tc['input'])
+                        ]
+                    ];
+                }
+                $prepared[] = [
+                    'role' => 'assistant',
+                    'content' => is_array($content) ? null : $content, // OpenAI n'aime pas les tableaux ici
+                    'tool_calls' => $toolCalls
+                ];
+                continue;
+            }
+
+            // Si c'est un résultat d'outil
+            if ($role === 'tool_result') {
+                $prepared[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $msg['tool_call_id'],
+                    'content' => is_string($msg['content']) ? $msg['content'] : json_encode($msg['content'])
+                ];
+                continue;
+            }
+
+            // Cas standard (user, system, ou assistant texte pur)
+            $prepared[] = [
+                'role' => $role,
+                'content' => is_array($content) ? ($content[0]['text'] ?? '') : $content
+            ];
+        }
+
+        return $prepared;
     }
 }

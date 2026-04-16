@@ -5,7 +5,7 @@ declare(strict_types=1);
  * Interface for AI provider adapters.
  * Each adapter must implement the stream() method to communicate with a specific AI provider.
  */
-interface LutinProviderAdapter {
+interface AbstractLutinAdapter {
     /**
      * Sends a request to the AI API.
      * Returns a generator that yields SSE-formatted strings.
@@ -38,4 +38,6 @@ interface LutinProviderAdapter {
      * @return array Provider-specific tool definitions
      */
     public function formatTools(array $tools): array;
+
+    public function prepareHistory(array $messages): array;
 }

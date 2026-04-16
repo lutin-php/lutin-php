@@ -9,9 +9,9 @@ chdir(__DIR__ . '/..');
 require_once __DIR__ . '/../src/classes/LutinConfig.php';
 require_once __DIR__ . '/../src/classes/LutinAuth.php';
 require_once __DIR__ . '/../src/classes/LutinFileManager.php';
-require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+require_once __DIR__ . '/../src/agent_providers/AbstractLutinAdapter.php';
 require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
-require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+require_once __DIR__ . '/../src/agent_providers/OpenAIGenericAdapter.php';
 require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
 require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
 require_once __DIR__ . '/../src/agents/LutinEditorAgent.php';
@@ -43,13 +43,13 @@ $tests = [];
 // Test: AnthropicAdapter instantiation
 $tests['LutinAgent::AnthropicAdapter (instantiation)'] = function() {
     $adapter = new AnthropicAdapter('test-key-123', 'claude-3-5-haiku-20241022');
-    assert_true($adapter instanceof LutinProviderAdapter, 'AnthropicAdapter should implement LutinProviderAdapter');
+    assert_true($adapter instanceof AbstractLutinAdapter, 'AnthropicAdapter should implement AbstractLutinAdapter');
 };
 
-// Test: OpenAIAdapter instantiation
-$tests['LutinAgent::OpenAIAdapter (instantiation)'] = function() {
-    $adapter = new OpenAIAdapter('sk-test-key', 'gpt-4');
-    assert_true($adapter instanceof LutinProviderAdapter, 'OpenAIAdapter should implement LutinProviderAdapter');
+// Test: OpenAIGenericAdapter instantiation
+$tests['LutinAgent::OpenAIGenericAdapter (instantiation)'] = function() {
+    $adapter = new OpenAIGenericAdapter('sk-test-key', 'gpt-4');
+    assert_true($adapter instanceof AbstractLutinAdapter, 'OpenAIGenericAdapter should implement AbstractLutinAdapter');
 };
 
 // Test: LutinChatAgent instantiation with Anthropic
@@ -167,9 +167,9 @@ $tests['LutinAgent::AnthropicAdapter::stream (returns generator)'] = function() 
     assert_true($result instanceof \Generator, 'stream() should return a Generator');
 };
 
-// Test: OpenAIAdapter stream returns generator
-$tests['LutinAgent::OpenAIAdapter::stream (returns generator)'] = function() {
-    $adapter = new OpenAIAdapter('sk-test-key', 'gpt-4');
+// Test: OpenAIGenericAdapter stream returns generator
+$tests['LutinAgent::OpenAIGenericAdapter::stream (returns generator)'] = function() {
+    $adapter = new OpenAIGenericAdapter('sk-test-key', 'gpt-4');
     $messages = [['role' => 'user', 'content' => 'hello']];
     $tools = [];
 

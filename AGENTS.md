@@ -38,9 +38,9 @@ lutin/
 │   │   ├── AbstractLutinAgent.php  # Base Agent class (abstract)
 │   │   └── LutinChatAgent.php      # Chat Agent with file tools
 │   ├── agent_providers/        # AI Provider adapters
-│   │   ├── LutinProviderAdapter.php  # Interface
+│   │   ├── AbstractLutinAdapter.php  # Interface
 │   │   ├── AnthropicAdapter.php      # Anthropic (Claude) adapter
-│   │   └── OpenAIAdapter.php         # OpenAI (GPT) adapter
+│   │   └── OpenAIGenericAdapter.php         # OpenAI (GPT) adapter
 │   ├── views/                  # HTML view partials
 │   │   ├── layout.php          # Outer HTML shell (head, tabs, script tags)
 │   │   ├── setup_wizard.php    # First-run setup form (includes project root config)
@@ -171,7 +171,7 @@ and writes a single self-contained `dist/lutin.php`.
 
 ## AI Provider Abstraction
 
-Provider adapters are in `src/agent_providers/` and implement the `LutinProviderAdapter` interface.
+Provider adapters are in `src/agent_providers/` and implement the `AbstractLutinAdapter` interface.
 `AbstractLutinAgent` (base class) communicates with a single provider configured globally in the lutin directory's `config.json`.
 Supported providers in v1: **Anthropic** (Claude) and **OpenAI** (GPT).
 The provider adapter is selected at runtime based on `config.provider` — no code changes needed to switch.
@@ -196,9 +196,9 @@ The base `AbstractLutinAgent` class (in `src/agents/AbstractLutinAgent.php`) pro
 - The agentic loop (`runLoop()`) for multi-turn tool interactions
 - SSE output handling (`sseFlush()`)
 - Helper method `addFileContentToPrompt()` for including file content in prompts
-- `COMMON_AVAILABLE_TOOLS` constant — the full list of all available tools (list_files, read_file, write_file)
+- `AGENT_TOOLS` constant — the full list of all available tools (list_files, read_file, write_file)
 - `buildToolDefinitions()` — returns all tools by default
-- `selectTools(array $toolNames)` — helper to select specific tools from COMMON_AVAILABLE_TOOLS
+- `selectTools(array $toolNames)` — helper to select specific tools from AGENT_TOOLS
 - `executeTool()` — executes file management tools via LutinFileManager
 - `executeCustomTool()` — hook for subclasses to handle custom tools
 

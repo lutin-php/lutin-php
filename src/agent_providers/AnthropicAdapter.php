@@ -3,9 +3,9 @@ declare(strict_types=1);
 
 /**
  * Anthropic (Claude) provider adapter.
- * Implements the LutinProviderAdapter interface for Anthropic's API.
+ * Implements the AbstractLutinAdapter interface for Anthropic's API.
  */
-class AnthropicAdapter implements LutinProviderAdapter {
+class AnthropicAdapter implements AbstractLutinAdapter {
     private string $apiKey;
     private string $model;
 
@@ -105,5 +105,52 @@ class AnthropicAdapter implements LutinProviderAdapter {
      */
     public function formatTools(array $tools): array {
         return $tools;
+    }
+
+    public function prepareHistory(array $messages): array {
+        $prepared = [];
+
+        foreach ($messages as $msg) {
+            $role = $msg['role'];
+
+            // Conversion Assistant (Appels d'outils)
+            if ($role === 'assistant' && !empty($msg['tool_calls'])) {
+                $content = [];
+                if (!empty($msg['content'])) {
+                    $content[] = ['type' => 'text', 'text' => $msg['content']];
+                }
+                foreach ($msg['tool_calls'] as $tc) {
+                    $content[] = [
+                        'type' => 'tool_use',
+                        'id' => $tc['id'],
+                        'name' => $tc['name'],
+                        'input' => $tc['input']
+                    ];
+                }
+                $prepared[] = ['role' => 'assistant', 'content' => $content];
+                continue;
+            }
+
+            // Conversion Tool Result -> User role avec type tool_result
+            if ($role === 'tool_result') {
+                $prepared[] = [
+                    'role' => 'user',
+                    'content' => [[
+                        'type' => 'tool_result',
+                        'tool_use_id' => $msg['tool_call_id'],
+                        'content' => $msg['content']
+                    ]]
+                ];
+                continue;
+            }
+
+            // Cas standard
+            $prepared[] = [
+                'role' => $role,
+                'content' => $msg['content']
+            ];
+        }
+
+        return $prepared;
     }
 }

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-04-15 14:00:03
+// Built: 2026-04-16 14:29:58
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -1161,12 +1161,12 @@ class LutinFileManager {
     }
 }
 
-// ── LutinProviderAdapter.php ─────
+// ── AbstractLutinAdapter.php ─────
 /**
  * Interface for AI provider adapters.
  * Each adapter must implement the stream() method to communicate with a specific AI provider.
  */
-interface LutinProviderAdapter {
+interface AbstractLutinAdapter {
     /**
      * Sends a request to the AI API.
      * Returns a generator that yields SSE-formatted strings.
@@ -1199,14 +1199,16 @@ interface LutinProviderAdapter {
      * @return array Provider-specific tool definitions
      */
     public function formatTools(array $tools): array;
+
+    public function prepareHistory(array $messages): array;
 }
 
 // ── AnthropicAdapter.php ─────
 /**
  * Anthropic (Claude) provider adapter.
- * Implements the LutinProviderAdapter interface for Anthropic's API.
+ * Implements the AbstractLutinAdapter interface for Anthropic's API.
  */
-class AnthropicAdapter implements LutinProviderAdapter {
+class AnthropicAdapter implements AbstractLutinAdapter {
     private string $apiKey;
     private string $model;
 
@@ -1307,24 +1309,72 @@ class AnthropicAdapter implements LutinProviderAdapter {
     public function formatTools(array $tools): array {
         return $tools;
     }
+
+    public function prepareHistory(array $messages): array {
+        $prepared = [];
+
+        foreach ($messages as $msg) {
+            $role = $msg['role'];
+
+            // Conversion Assistant (Appels d'outils)
+            if ($role === 'assistant' && !empty($msg['tool_calls'])) {
+                $content = [];
+                if (!empty($msg['content'])) {
+                    $content[] = ['type' => 'text', 'text' => $msg['content']];
+                }
+                foreach ($msg['tool_calls'] as $tc) {
+                    $content[] = [
+                        'type' => 'tool_use',
+                        'id' => $tc['id'],
+                        'name' => $tc['name'],
+                        'input' => $tc['input']
+                    ];
+                }
+                $prepared[] = ['role' => 'assistant', 'content' => $content];
+                continue;
+            }
+
+            // Conversion Tool Result -> User role avec type tool_result
+            if ($role === 'tool_result') {
+                $prepared[] = [
+                    'role' => 'user',
+                    'content' => [[
+                        'type' => 'tool_result',
+                        'tool_use_id' => $msg['tool_call_id'],
+                        'content' => $msg['content']
+                    ]]
+                ];
+                continue;
+            }
+
+            // Cas standard
+            $prepared[] = [
+                'role' => $role,
+                'content' => $msg['content']
+            ];
+        }
+
+        return $prepared;
+    }
 }
 
-// ── OpenAIAdapter.php ─────
+// ── OpenAIGenericAdapter.php ─────
 /**
  * OpenAI (GPT) provider adapter.
- * Implements the LutinProviderAdapter interface for OpenAI's API.
+ * Implements the AbstractLutinAdapter interface for OpenAI's API.
  */
-class OpenAIAdapter implements LutinProviderAdapter {
+class OpenAIGenericAdapter implements AbstractLutinAdapter {
+    private string $url;
     private string $apiKey;
     private string $model;
 
-    public function __construct(string $apiKey, string $model) {
+    public function __construct(string $url, string $apiKey, string $model) {
+        $this->url = $url;
         $this->apiKey = $apiKey;
         $this->model = $model;
     }
 
     public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator {
-        $url = 'https://api.openai.com/v1/chat/completions';
 
         // Use provided system prompt or fall back to default
         $system = $systemPrompt ?: 'You are Lutin, an AI assistant integrated into a PHP website editor. ' .
@@ -1342,17 +1392,25 @@ class OpenAIAdapter implements LutinProviderAdapter {
         $payload = [
             'model' => $this->model,
             'messages' => $fullMessages,
-            'tools' => $tools,
-            'tool_choice' => 'auto',
+            'stream' => false,
         ];
 
-        $ch = curl_init($url);
+        if (!empty($tools)) {
+            $payload['tools'] = $tools;
+            $payload['tool_choice'] = 'auto';
+        }
+
+        // TMP
+        file_put_contents('php://stderr', json_encode($payload, JSON_PRETTY_PRINT));
+
+        $ch = curl_init($this->url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
             CURLOPT_HTTPHEADER => [
                 'Authorization: Bearer ' . $this->apiKey,
                 'Content-Type: application/json',
+                'User-Agent: Lutin-Agent-PHP/1.0',
             ],
             CURLOPT_POSTFIELDS => json_encode($payload),
             CURLOPT_TIMEOUT => 300,
@@ -1438,13 +1496,122 @@ class OpenAIAdapter implements LutinProviderAdapter {
                 'function' => [
                     'name' => $tool['name'],
                     'description' => $tool['description'],
-                    'parameters' => $tool['input_schema'],
+                    'parameters' => (object)($tool['input_schema'] ?? [
+                        'type' => 'object',
+                        'properties' => (object)[]
+                    ]),
                 ],
             ];
         }, $tools);
     }
+
+    public function prepareHistory(array $messages): array {
+        $prepared = [];
+
+        foreach ($messages as $msg) {
+            $role = $msg['role'];
+            $content = $msg['content'] ?? '';
+
+            // Si c'est un message assistant avec des appels d'outils
+            if ($role === 'assistant' && !empty($msg['tool_calls'])) {
+                $toolCalls = [];
+                foreach ($msg['tool_calls'] as $tc) {
+                    $toolCalls[] = [
+                        'id' => $tc['id'],
+                        'type' => 'function',
+                        'function' => [
+                            'name' => $tc['name'],
+                            'arguments' => json_encode($tc['input'])
+                        ]
+                    ];
+                }
+                $prepared[] = [
+                    'role' => 'assistant',
+                    'content' => is_array($content) ? null : $content, // OpenAI n'aime pas les tableaux ici
+                    'tool_calls' => $toolCalls
+                ];
+                continue;
+            }
+
+            // Si c'est un résultat d'outil
+            if ($role === 'tool_result') {
+                $prepared[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $msg['tool_call_id'],
+                    'content' => is_string($msg['content']) ? $msg['content'] : json_encode($msg['content'])
+                ];
+                continue;
+            }
+
+            // Cas standard (user, system, ou assistant texte pur)
+            $prepared[] = [
+                'role' => $role,
+                'content' => is_array($content) ? ($content[0]['text'] ?? '') : $content
+            ];
+        }
+
+        return $prepared;
+    }
 }
 
+// ── AgentTools.php ─────
+const AGENT_TOOLS = [
+    'list_files' => [
+        'name' => 'list_files',
+        'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
+        'input_schema' => [
+            'type' => 'object',
+            'properties' => [
+                'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
+            ],
+            'required' => ['path'],
+        ],
+    ],
+    'read_file' => [
+        'name' => 'read_file',
+        'description' => 'Reads a file. Path is relative to project root.',
+        'input_schema' => [
+            'type' => 'object',
+            'properties' => [
+                'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+            ],
+            'required' => ['path'],
+        ],
+    ],
+    'write_file' => [
+        'name' => 'write_file',
+        'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
+        'input_schema' => [
+            'type' => 'object',
+            'properties' => [
+                'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+                'content' => ['type' => 'string', 'description' => 'File content'],
+            ],
+            'required' => ['path', 'content'],
+        ],
+    ],
+    'open_file_in_editor' => [
+        'name' => 'open_file_in_editor',
+        'description' => 'Opens a file in the editor. Use this when you want to show the user a specific file in the editor interface. The file will be loaded and displayed to the user.',
+        'input_schema' => [
+            'type' => 'object',
+            'properties' => [
+                'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
+            ],
+            'required' => ['path'],
+        ],
+    ],
+    'list_modules' => [
+        'name' => 'list_modules',
+        'description' => 'Lists available Lutin modules from the remote repository. Can be filtered by a search query.',
+        'input_schema' => [
+            'type' => 'object',
+            'properties' => [
+                'query' => ['type' => 'string', 'description' => 'Optional: A search query to filter modules by name or description.'],
+            ],
+        ],
+    ],
+];
 // ── AbstractLutinAgent.php ─────
 /**
  * Base class for all Lutin AI agents.
@@ -1456,68 +1623,9 @@ abstract class AbstractLutinAgent {
     /** Maximum number of iterations in the agentic loop to prevent infinite loops */
     protected const MAX_ITERATIONS = 10;
 
-    /** Full list of all available tools */
-    protected const COMMON_AVAILABLE_TOOLS = [
-        'list_files' => [
-            'name' => 'list_files',
-            'description' => 'Lists files in a directory. Path is relative to project root (parent of web root). Use empty string "" for project root.',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'path' => ['type' => 'string', 'description' => 'Directory path relative to project root (e.g., "src", "public", "docs")'],
-                ],
-                'required' => ['path'],
-            ],
-        ],
-        'read_file' => [
-            'name' => 'read_file',
-            'description' => 'Reads a file. Path is relative to project root.',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                ],
-                'required' => ['path'],
-            ],
-        ],
-        'write_file' => [
-            'name' => 'write_file',
-            'description' => 'Writes or creates a file. Path is relative to project root. Cannot write to the lutin/ directory.',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                    'content' => ['type' => 'string', 'description' => 'File content'],
-                ],
-                'required' => ['path', 'content'],
-            ],
-        ],
-        'open_file_in_editor' => [
-            'name' => 'open_file_in_editor',
-            'description' => 'Opens a file in the editor. Use this when you want to show the user a specific file in the editor interface. The file will be loaded and displayed to the user.',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'path' => ['type' => 'string', 'description' => 'File path relative to project root (e.g., "src/classes/MyClass.php")'],
-                ],
-                'required' => ['path'],
-            ],
-        ],
-        'list_modules' => [
-            'name' => 'list_modules',
-            'description' => 'Lists available Lutin modules from the remote repository. Can be filtered by a search query.',
-            'input_schema' => [
-                'type' => 'object',
-                'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'Optional: A search query to filter modules by name or description.'],
-                ],
-            ],
-        ],
-    ];
-
     protected LutinConfig $config;
     protected LutinFileManager $fm;
-    protected LutinProviderAdapter $adapter;
+    protected AbstractLutinAdapter $adapter;
 
     /** Message history accumulated during this request (role/content pairs) */
     protected array $messages = [];
@@ -1538,7 +1646,7 @@ abstract class AbstractLutinAgent {
      * Selects the correct adapter based on config->getProvider().
      * Throws \RuntimeException if provider is unknown.
      */
-    private function buildAdapter(): LutinProviderAdapter {
+    private function buildAdapter(): AbstractLutinAdapter {
         $provider = $this->config->getProvider();
         $apiKey = $this->config->getApiKey();
         $model = $this->config->getModel() ?? 'claude-3-5-haiku-20241022';
@@ -1549,7 +1657,9 @@ abstract class AbstractLutinAgent {
 
         return match ($provider) {
             'anthropic' => new AnthropicAdapter($apiKey, $model),
-            'openai' => new OpenAIAdapter($apiKey, $model),
+            'openai' => new OpenAIGenericAdapter('https://api.openai.com/v1/chat/completions', $apiKey, $model),
+            'gemini' => new OpenAIGenericAdapter('https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions', $apiKey, $model),
+            'github' => new OpenAIGenericAdapter('https://models.inference.ai.azure.com/chat/completions', $apiKey, $model),
             default => throw new \RuntimeException('Unknown provider: ' . $provider),
         };
     }
@@ -1562,18 +1672,18 @@ abstract class AbstractLutinAgent {
 
     /**
      * Returns the tool schema array in provider-agnostic format.
-     * Subclasses override this to select which tools they want from COMMON_AVAILABLE_TOOLS.
+     * Subclasses override this to select which tools they want from AGENT_TOOLS.
      * 
      * @return array Provider-agnostic tool definitions
      */
     protected function buildToolDefinitions(): array {
         // By default, return all available tools
         // Subclasses should override to select specific tools via parent::buildToolDefinitions(['tool1', 'tool2'])
-        return array_values(self::COMMON_AVAILABLE_TOOLS);
+        return array_values(AGENT_TOOLS);
     }
 
     /**
-     * Helper to select specific tools from COMMON_AVAILABLE_TOOLS.
+     * Helper to select specific tools from AGENT_TOOLS.
      * 
      * @param string[] $toolNames List of tool names to include
      * @return array Provider-agnostic tool definitions
@@ -1581,8 +1691,8 @@ abstract class AbstractLutinAgent {
     protected function selectTools(array $toolNames): array {
         $tools = [];
         foreach ($toolNames as $name) {
-            if (isset(self::COMMON_AVAILABLE_TOOLS[$name])) {
-                $tools[] = self::COMMON_AVAILABLE_TOOLS[$name];
+            if (isset(AGENT_TOOLS[$name])) {
+                $tools[] = AGENT_TOOLS[$name];
             }
         }
         return $tools;
@@ -1608,7 +1718,7 @@ abstract class AbstractLutinAgent {
 
     /**
      * Executes a tool call from the AI.
-     * Handles file management tools from COMMON_AVAILABLE_TOOLS.
+     * Handles file management tools from AGENT_TOOLS.
      * Subclasses can override to add custom tool handling.
      * 
      * @param string $name The tool name
@@ -1651,7 +1761,7 @@ abstract class AbstractLutinAgent {
      * @throws \RuntimeException if fetching or parsing fails.
      */
     private function fetchModulesJson(): array {
-        $modulesUrl = 'https://github.com/Nicoco220983/lutin-modules/raw/main/modules.json';
+        $modulesUrl = 'https://raw.githubusercontent.com/Nicoco220983/lutin-modules/master/modules.json';
         $context = stream_context_create([
             'http' => [
                 'timeout' => 10, // Timeout in seconds
@@ -1729,7 +1839,8 @@ abstract class AbstractLutinAgent {
 
         try {
             $systemPrompt = $this->buildSystemPrompt();
-            $generator = $this->adapter->stream($this->messages, $this->toolDefinitions, $systemPrompt);
+            $historyForApi = $this->adapter->prepareHistory($this->messages);
+            $generator = $this->adapter->stream($historyForApi, $this->toolDefinitions, $systemPrompt);
 
             $assistantContent = [];
             $textBuffer = '';
@@ -1770,21 +1881,27 @@ abstract class AbstractLutinAgent {
             }
 
             // Build the assistant message for history
-            if (!empty($textBuffer)) {
-                $assistantContent[] = ['type' => 'text', 'text' => $textBuffer];
-            }
-            foreach ($toolCalls as $tool) {
-                $assistantContent[] = [
-                    'type' => 'tool_use',
-                    'id' => $tool['id'],
-                    'name' => $tool['name'],
-                    'input' => $tool['input'],
+            // if (!empty($textBuffer)) {
+            //     $assistantContent[] = ['type' => 'text', 'text' => $textBuffer];
+            // }
+            // foreach ($toolCalls as $tool) {
+            //     $assistantContent[] = [
+            //         'type' => 'tool_use',
+            //         'id' => $tool['id'],
+            //         'name' => $tool['name'],
+            //         'input' => $tool['input'],
+            //     ];
+            // }
+            // // Add assistant message to history (needed for proper context)
+            // if (!empty($assistantContent)) {
+            //     $this->messages[] = ['role' => 'assistant', 'content' => $assistantContent];
+            // }
+            if (!empty($textBuffer) || !empty($toolCalls)) {
+                $this->messages[] = [
+                    'role' => 'assistant',
+                    'content' => $textBuffer,
+                    'tool_calls' => $toolCalls,
                 ];
-            }
-
-            // Add assistant message to history (needed for proper context)
-            if (!empty($assistantContent)) {
-                $this->messages[] = ['role' => 'assistant', 'content' => $assistantContent];
             }
 
             // Check stop reason and execute tools if needed
@@ -1796,15 +1913,20 @@ abstract class AbstractLutinAgent {
                         
                         // Add tool result to message history
                         $this->messages[] = [
-                            'role' => 'user',
-                            'content' => [
-                                [
-                                    'type' => 'tool_result',
-                                    'tool_use_id' => $tool['id'],
-                                    'content' => $result,
-                                ]
-                            ]
+                            'role' => 'tool_result',
+                            'tool_call_id' => $tool['id'],
+                            'content' => $result
                         ];
+                        // $this->messages[] = [
+                        //     'role' => 'user',
+                        //     'content' => [
+                        //         [
+                        //             'type' => 'tool_result',
+                        //             'tool_use_id' => $tool['id'],
+                        //             'content' => $result,
+                        //         ]
+                        //     ]
+                        // ];
                         
                         $this->sseFlush([
                             'type' => 'tool_result',
@@ -4484,6 +4606,8 @@ const LUTIN_VIEW_SETUP_WIZARD = <<<'LUTINVIEW'
         <select id="setup-provider" name="provider">
           <option value="anthropic">Anthropic (Claude)</option>
           <option value="openai">OpenAI (GPT)</option>
+          <option value="gemini">Gemini (Google)</option>
+          <option value="github">GitHub Models</option>
         </select>
       </label>
       <label>
@@ -4901,6 +5025,8 @@ const LUTIN_VIEW_TAB_CONFIG = <<<'LUTINVIEW'
         <select id="config-provider" name="provider">
           <option value="anthropic">Anthropic (Claude)</option>
           <option value="openai">OpenAI (GPT)</option>
+          <option value="gemini">Gemini (Google)</option>
+          <option value="github">GitHub Models</option>
         </select>
       </label>
       <label>
@@ -5005,10 +5131,11 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/classes/LutinAuth.php';
     require_once __DIR__ . '/classes/LutinFileManager.php';
     // Agent provider adapters
-    require_once __DIR__ . '/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/agent_providers/AbstractLutinAdapter.php';
     require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
-    require_once __DIR__ . '/agent_providers/OpenAIAdapter.php';
+    require_once __DIR__ . '/agent_providers/OpenAIGenericAdapter.php';
     // Agent classes
+    require_once __DIR__ . '/agents/AgentTools.php';
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/agents/LutinChatAgent.php';
     require_once __DIR__ . '/agents/LutinEditorAgent.php';

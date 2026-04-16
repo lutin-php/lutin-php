@@ -159,9 +159,9 @@ $tests['LutinFileManager::urlToFile (basic heuristics)'] = function() use ($scra
 
 // Test: LutinAgent — AGENTS.md from lutin directory is included in system prompt
 $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scratch) {
-    require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/AbstractLutinAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
-    require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/OpenAIGenericAdapter.php';
     require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
@@ -195,9 +195,9 @@ $tests['LutinAgent::buildSystemPrompt (with AGENTS.md)'] = function() use ($scra
 
 // Test: LutinAgent — buildSystemPrompt works without AGENTS.md
 $tests['LutinAgent::buildSystemPrompt (without AGENTS.md)'] = function() use ($scratch) {
-    require_once __DIR__ . '/../src/agent_providers/LutinProviderAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/AbstractLutinAdapter.php';
     require_once __DIR__ . '/../src/agent_providers/AnthropicAdapter.php';
-    require_once __DIR__ . '/../src/agent_providers/OpenAIAdapter.php';
+    require_once __DIR__ . '/../src/agent_providers/OpenAIGenericAdapter.php';
     require_once __DIR__ . '/../src/agents/AbstractLutinAgent.php';
     require_once __DIR__ . '/../src/agents/LutinChatAgent.php';
     
