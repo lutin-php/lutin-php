@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Lutin.php v1.0.0
-// Built: 2026-04-16 14:29:58
+// Built: 2026-04-17 09:02:38
 
 // ── LutinConfig.php ─────
 declare(strict_types=1);
@@ -1161,48 +1161,6 @@ class LutinFileManager {
     }
 }
 
-// ── AbstractLutinAdapter.php ─────
-/**
- * Interface for AI provider adapters.
- * Each adapter must implement the stream() method to communicate with a specific AI provider.
- */
-interface AbstractLutinAdapter {
-    /**
-     * Sends a request to the AI API.
-     * Returns a generator that yields SSE-formatted strings.
-     * Each yielded string is either:
-     *   - A text delta:   "data: " . json_encode(['type'=>'text','delta'=>'...']) . "\n\n"
-     *   - A tool call:    "data: " . json_encode(['type'=>'tool_call','name'=>'...','input'=>[...],'id'=>'...']) . "\n\n"
-     *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
-     * 
-     * @param array $messages The conversation history
-     * @param array $tools Tool definitions for the provider (already formatted for this provider)
-     * @param string $systemPrompt The system prompt to use
-     * @return \Generator Yields SSE-formatted strings
-     */
-    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
-
-    /**
-     * Formats generic tool definitions to the provider-specific format.
-     * 
-     * Generic format:
-     * [
-     *   [
-     *     'name' => 'tool_name',
-     *     'description' => '...',
-     *     'input_schema' => [...]
-     *   ],
-     *   ...
-     * ]
-     * 
-     * @param array $tools Generic tool definitions
-     * @return array Provider-specific tool definitions
-     */
-    public function formatTools(array $tools): array;
-
-    public function prepareHistory(array $messages): array;
-}
-
 // ── AnthropicAdapter.php ─────
 /**
  * Anthropic (Claude) provider adapter.
@@ -1554,6 +1512,71 @@ class OpenAIGenericAdapter implements AbstractLutinAdapter {
     }
 }
 
+// ── AgentAdaptersCatalog.php ─────
+class AgentAdaptersCatalog {
+    public static function get(): array {
+        return [
+            'anthropic' => [
+                'name' => 'Anthropic (Claude)',
+                'builder' => fn($apiKey, $model) => new AnthropicAdapter($apiKey, $model),
+            ],
+            'openai' => [
+                'name' => 'OpenAI (GPT)',
+                'builder' => fn($apiKey, $model) => new OpenAIGenericAdapter('https://api.openai.com/v1/chat/completions', $apiKey, $model),
+            ],
+            'gemini' => [
+                'name' => 'Gemini (Google)',
+                'builder' => fn($apiKey, $model) => new OpenAIGenericAdapter('https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions', $apiKey, $model),
+            ],
+            'github' => [
+                'name' => 'GitHub Models',
+                'builder' => fn($apiKey, $model) => new OpenAIGenericAdapter('https://models.inference.ai.azure.com/chat/completions', $apiKey, $model),
+            ],
+        ];
+    }
+}
+// ── AbstractLutinAdapter.php ─────
+/**
+ * Interface for AI provider adapters.
+ * Each adapter must implement the stream() method to communicate with a specific AI provider.
+ */
+interface AbstractLutinAdapter {
+    /**
+     * Sends a request to the AI API.
+     * Returns a generator that yields SSE-formatted strings.
+     * Each yielded string is either:
+     *   - A text delta:   "data: " . json_encode(['type'=>'text','delta'=>'...']) . "\n\n"
+     *   - A tool call:    "data: " . json_encode(['type'=>'tool_call','name'=>'...','input'=>[...],'id'=>'...']) . "\n\n"
+     *   - A stop signal:  "data: " . json_encode(['type'=>'stop','stop_reason'=>'...']) . "\n\n"
+     * 
+     * @param array $messages The conversation history
+     * @param array $tools Tool definitions for the provider (already formatted for this provider)
+     * @param string $systemPrompt The system prompt to use
+     * @return \Generator Yields SSE-formatted strings
+     */
+    public function stream(array $messages, array $tools, string $systemPrompt = ''): \Generator;
+
+    /**
+     * Formats generic tool definitions to the provider-specific format.
+     * 
+     * Generic format:
+     * [
+     *   [
+     *     'name' => 'tool_name',
+     *     'description' => '...',
+     *     'input_schema' => [...]
+     *   ],
+     *   ...
+     * ]
+     * 
+     * @param array $tools Generic tool definitions
+     * @return array Provider-specific tool definitions
+     */
+    public function formatTools(array $tools): array;
+
+    public function prepareHistory(array $messages): array;
+}
+
 // ── AgentTools.php ─────
 const AGENT_TOOLS = [
     'list_files' => [
@@ -1601,9 +1624,9 @@ const AGENT_TOOLS = [
             'required' => ['path'],
         ],
     ],
-    'list_modules' => [
-        'name' => 'list_modules',
-        'description' => 'Lists available Lutin modules from the remote repository. Can be filtered by a search query.',
+    'search_remote_modules' => [
+        'name' => 'search_remote_modules',
+        'description' => 'Search available Lutin modules from the remote repository. Can be filtered by a search query.',
         'input_schema' => [
             'type' => 'object',
             'properties' => [
@@ -1655,13 +1678,12 @@ abstract class AbstractLutinAgent {
             throw new \RuntimeException('API key not configured');
         }
 
-        return match ($provider) {
-            'anthropic' => new AnthropicAdapter($apiKey, $model),
-            'openai' => new OpenAIGenericAdapter('https://api.openai.com/v1/chat/completions', $apiKey, $model),
-            'gemini' => new OpenAIGenericAdapter('https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions', $apiKey, $model),
-            'github' => new OpenAIGenericAdapter('https://models.inference.ai.azure.com/chat/completions', $apiKey, $model),
-            default => throw new \RuntimeException('Unknown provider: ' . $provider),
-        };
+        $adapters = AgentAdaptersCatalog::get();
+        if (!isset($adapters[$provider])) {
+            throw new \RuntimeException("Unknown provider: $provider. Available: " . implode(', ', array_keys(AdapterRegistry::$adapters)));
+        }
+        $builder = $adapters[$provider]['builder'];
+        return $builder($apiKey, $model);
     }
 
     /**
@@ -1734,7 +1756,7 @@ abstract class AbstractLutinAgent {
                     $this->fm->writeFile($input['path'] ?? '', $input['content'] ?? '');
                     return json_encode(['ok' => true]);
                 })(),
-                'list_modules' => (function() use ($input) {
+                'search_remote_modules' => (function() use ($input) {
                     $query = $input['query'] ?? '';
                     $modules = $this->fetchModulesJson();
                     if (empty($query)) {
@@ -2011,7 +2033,7 @@ class LutinChatAgent extends AbstractLutinAgent {
      * @return array Provider-agnostic tool definitions
      */
     protected function buildToolDefinitions(): array {
-        return $this->selectTools(['list_files', 'read_file', 'write_file', 'list_modules']);
+        return $this->selectTools(['list_files', 'read_file', 'write_file', 'search_remote_modules']);
     }
 }
 
@@ -4604,10 +4626,11 @@ const LUTIN_VIEW_SETUP_WIZARD = <<<'LUTINVIEW'
       <label>
         AI Provider
         <select id="setup-provider" name="provider">
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="openai">OpenAI (GPT)</option>
-          <option value="gemini">Gemini (Google)</option>
-          <option value="github">GitHub Models</option>
+          <?php foreach (AgentAdaptersCatalog::get() as $id => $info): ?>
+            <option value="<?= htmlspecialchars($id) ?>">
+              <?= htmlspecialchars($info['name']) ?>
+            </option>
+          <?php endforeach; ?>
         </select>
       </label>
       <label>
@@ -5023,11 +5046,15 @@ const LUTIN_VIEW_TAB_CONFIG = <<<'LUTINVIEW'
       <label>
         AI Provider
         <select id="config-provider" name="provider">
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="openai">OpenAI (GPT)</option>
-          <option value="gemini">Gemini (Google)</option>
-          <option value="github">GitHub Models</option>
-        </select>
+                      <option value="anthropic">
+              Anthropic (Claude)            </option>
+                      <option value="openai">
+              OpenAI (GPT)            </option>
+                      <option value="gemini">
+              Gemini (Google)            </option>
+                      <option value="github">
+              GitHub Models            </option>
+                  </select>
       </label>
       <label>
         API Key
@@ -5131,9 +5158,10 @@ if (!class_exists('LutinConfig')) {
     require_once __DIR__ . '/classes/LutinAuth.php';
     require_once __DIR__ . '/classes/LutinFileManager.php';
     // Agent provider adapters
-    require_once __DIR__ . '/agent_providers/AbstractLutinAdapter.php';
     require_once __DIR__ . '/agent_providers/AnthropicAdapter.php';
     require_once __DIR__ . '/agent_providers/OpenAIGenericAdapter.php';
+    require_once __DIR__ . '/agent_providers/AgentAdaptersCatalog.php';
+    require_once __DIR__ . '/agent_providers/AbstractLutinAdapter.php';
     // Agent classes
     require_once __DIR__ . '/agents/AgentTools.php';
     require_once __DIR__ . '/agents/AbstractLutinAgent.php';

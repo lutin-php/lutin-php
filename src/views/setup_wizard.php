@@ -13,10 +13,11 @@
       <label>
         AI Provider
         <select id="setup-provider" name="provider">
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="openai">OpenAI (GPT)</option>
-          <option value="gemini">Gemini (Google)</option>
-          <option value="github">GitHub Models</option>
+          <?php foreach (AgentAdaptersCatalog::get() as $id => $info): ?>
+            <option value="<?= htmlspecialchars($id) ?>">
+              <?= htmlspecialchars($info['name']) ?>
+            </option>
+          <?php endforeach; ?>
         </select>
       </label>
       <label>

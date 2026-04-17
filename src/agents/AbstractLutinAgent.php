@@ -43,13 +43,12 @@ abstract class AbstractLutinAgent {
             throw new \RuntimeException('API key not configured');
         }
 
-        return match ($provider) {
-            'anthropic' => new AnthropicAdapter($apiKey, $model),
-            'openai' => new OpenAIGenericAdapter('https://api.openai.com/v1/chat/completions', $apiKey, $model),
-            'gemini' => new OpenAIGenericAdapter('https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions', $apiKey, $model),
-            'github' => new OpenAIGenericAdapter('https://models.inference.ai.azure.com/chat/completions', $apiKey, $model),
-            default => throw new \RuntimeException('Unknown provider: ' . $provider),
-        };
+        $adapters = AgentAdaptersCatalog::get();
+        if (!isset($adapters[$provider])) {
+            throw new \RuntimeException("Unknown provider: $provider. Available: " . implode(', ', array_keys(AdapterRegistry::$adapters)));
+        }
+        $builder = $adapters[$provider]['builder'];
+        return $builder($apiKey, $model);
     }
 
     /**

@@ -11,9 +11,10 @@ $classFiles = [
     'src/classes/LutinAuth.php',
     'src/classes/LutinFileManager.php',
     // Agent provider adapters
-    'src/agent_providers/AbstractLutinAdapter.php',
     'src/agent_providers/AnthropicAdapter.php',
     'src/agent_providers/OpenAIGenericAdapter.php',
+    'src/agent_providers/AgentAdaptersCatalog.php',
+    'src/agent_providers/AbstractLutinAdapter.php',
     // Agent classes
     'src/agents/AgentTools.php',
     'src/agents/AbstractLutinAgent.php',
@@ -36,6 +37,11 @@ $viewFiles = [
     'tab_editor'    => 'src/views/tab_editor.php',
     'tab_config'    => 'src/views/tab_config.php',
     'tab_templates' => 'src/views/tab_templates.php',
+];
+
+// Mark views that require PHP execution during build
+$viewRequiresPHP = [
+    'tab_config',
 ];
 
 $jsFile    = 'src/assets/app.js';
@@ -86,8 +92,23 @@ foreach ($viewFiles as $name => $file) {
         continue;
     }
     $constName = 'LUTIN_VIEW_' . strtoupper($name);
+
+    // Pre-load required classes for PHP-rendered views
+    if ($name === 'tab_config') {
+        require_once __DIR__ . '/../src/agent_providers/AgentAdaptersCatalog.php';
+    }
+
+    // Execute PHP output buffering for views that need dynamic logic
+    if (in_array($name, $viewRequiresPHP)) {
+        ob_start();
+        include $file;
+        $viewContent = ob_get_clean();
+    } else {
+        $viewContent = file_get_contents($file);
+    }
+
     $out .= "const {$constName} = <<<'LUTINVIEW'\n";
-    $out .= file_get_contents($file) . "\n";
+    $out .= $viewContent . "\n";
     $out .= "LUTINVIEW;\n\n";
 }
 
